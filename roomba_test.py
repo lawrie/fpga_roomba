@@ -13,7 +13,7 @@ class RoombaTest(Elaboratable):
     def elaborate(self, platform):
 
         uart    = platform.request("uart")
-        #leds    = Cat([platform.request("led", i) for i in range(4)])
+        leds    = Cat([platform.request("led", i) for i in range(2,4)])
         clk_freq = int(platform.default_clk_frequency)
         baud = 115200
         divisor = int(clk_freq // baud)
@@ -21,10 +21,13 @@ class RoombaTest(Elaboratable):
         btn = platform.request("button", 0)
 
         speed = 200
-
         start = 128
         control = 130
         move = 137
+        turn_time = 2.5
+        forward_time = 5
+        wake_time = 2
+        wait_time = 1
 
         m = Module()
 
@@ -34,14 +37,19 @@ class RoombaTest(Elaboratable):
         m.d.comb += [
             # Always allow reads
             serial.rx.ack.eq(1),
-            # Show any errors on leds: red for parity, green for overflow, blue for frame
-            #leds.eq(Cat(serial.rx.err.frame, serial.rx.err.overflow, 0b0, serial.rx.err.parity))
         ]
 
         cnt = Signal(28, reset=0)
+        cmd = Signal(40)
+        l = Signal(3)
+        sending = Signal(reset=0)
 
         with m.FSM():
             with m.State("BUTTON"):
+                m.d.sync += [
+                    leds[0].eq(0),
+                    leds[1].eq(0)
+                ]
                 with m.If(btn):
                     m.next = "BEGIN"
             with m.State("BEGIN"):
@@ -58,121 +66,140 @@ class RoombaTest(Elaboratable):
                     m.next = "WAKE"
             with m.State("WAKE"):
                 m.d.sync += cnt.eq(cnt + 1)
-                with m.If(cnt == (clk_freq * 2)):
+                with m.If(cnt == (clk_freq * wake_time)):
                     m.d.sync += [
                         cnt.eq(0),
                         # Send start command
-                        serial.tx.data.eq(start),
-                        serial.tx.ack.eq(1)
+                        cmd[:8].eq(start),
+                        l.eq(0),
+                        sending.eq(1)
                     ]
                     m.next = "START"
             with m.State("START"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
+                with m.If(~sending):
                     m.d.sync += [
                         # Send control command
-                        serial.tx.data.eq(control),
-                        serial.tx.ack.eq(1)
+                        cmd[:8].eq(control),
+                        l.eq(0),
+                        sending.eq(1)
                     ]
                     m.next = "CONTROL"
             with m.State("CONTROL"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
+                m.d.sync += cnt.eq(cnt + 1)
+                with m.If(cnt == (clk_freq * wait_time)):
                     m.d.sync += [
+                        cnt.eq(0),
                         # Send move command
-                        serial.tx.data.eq(move),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "FORWARD1"
-            with m.State("FORWARD1"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send msb of speed
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "FORWARD2"
-            with m.State("FORWARD2"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send lsb of speed
-                        serial.tx.data.eq(speed),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "FORWARD3"
-            with m.State("FORWARD3"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send msb of arc
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "FORWARD4"
-            with m.State("FORWARD4"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send lsb of arc
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
+                        cmd[:8].eq(move),
+                        cmd[8:16].eq(0),
+                        cmd[16:24].eq(speed),
+                        cmd[24:32].eq(0x80),
+                        cmd[32:].eq(0),
+                        l.eq(4),
+                        sending.eq(1)
                     ]
                     m.next = "FORWARD"
             with m.State("FORWARD"):
                 m.d.sync += [
-                    serial.tx.ack.eq(0),
-                    cnt.eq(cnt + 1)
+                    cnt.eq(cnt + 1),
+                    leds[0].eq(1)
                 ]
+                # Wait 5 seconds
+                with m.If(cnt == (clk_freq * forward_time)):
+                    m.d.sync += [
+                        # Send spinleft
+                        cnt.eq(0),
+                        cmd[:8].eq(move),
+                        cmd[8:16].eq(0),
+                        cmd[16:24].eq(speed),
+                        cmd[24:32].eq(0),
+                        cmd[32:].eq(1),
+                        l.eq(4),
+                        sending.eq(1)
+                    ]
+                    m.next = "SPINLEFT"
+            with m.State("SPINLEFT"):
+                m.d.sync += cnt.eq(cnt + 1)
+                # Wait 5 seconds
+                with m.If(cnt == int(clk_freq * turn_time)):
+                    m.d.sync += [
+                        # Send forward
+                        cnt.eq(0),
+                        cmd[:8].eq(move),
+                        cmd[8:16].eq(0),
+                        cmd[16:24].eq(speed),
+                        cmd[24:32].eq(0x80),
+                        cmd[32:].eq(1),
+                        l.eq(4),
+                        sending.eq(1)
+                    ]
+                    m.next = "FORWARD2"
+            with m.State("FORWARD2"):
+                m.d.sync += [
+                    cnt.eq(cnt + 1),
+                    leds[1].eq(1)
+                ]
+                # Wait 5 seconds
                 with m.If(cnt == (clk_freq * 5)):
                     m.d.sync += [
+                        # Send spinleft
                         cnt.eq(0),
-                        serial.tx.data.eq(move),
-                        serial.tx.ack.eq(1)
+                        cmd[:8].eq(move),
+                        cmd[8:16].eq(0),
+                        cmd[16:24].eq(speed),
+                        cmd[24:32].eq(0),
+                        cmd[32:].eq(1),
+                        l.eq(4),
+                        sending.eq(1)
                     ]
-                    m.next = "STOP1"
-            with m.State("STOP1"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
+                    m.next = "SPINLEFT2"
+            with m.State("SPINLEFT2"):
+                m.d.sync += cnt.eq(cnt + 1)
+                # Wait 5 seconds
+                with m.If(cnt == int(clk_freq * turn_time)):
                     m.d.sync += [
-                        # Send msb of speed
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "STOP2"
-            with m.State("STOP2"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send lsb of speed
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "STOP3"
-            with m.State("STOP3"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send msb of arc
-                        serial.tx.data.eq(0x80),
-                        serial.tx.ack.eq(1)
-                    ]
-                    m.next = "STOP4"
-            with m.State("STOP4"):
-                m.d.sync += serial.tx.ack.eq(0)
-                with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    m.d.sync += [
-                        # Send lsb of arc
-                        serial.tx.data.eq(0),
-                        serial.tx.ack.eq(1)
+                        # Send stop
+                        cnt.eq(0),
+                        cmd[:8].eq(move),
+                        cmd[8:16].eq(0),
+                        cmd[16:24].eq(0),
+                        cmd[24:32].eq(0x80),
+                        cmd[32:].eq(1),
+                        l.eq(4),
+                        sending.eq(1)
                     ]
                     m.next = "STOP"
             with m.State("STOP"):
-                m.d.sync += [
-                    serial.tx.ack.eq(0)
-                ]
-                m.next = "BUTTON"
+                with m.If(~sending):
+                    m.next = "BUTTON"
+
+        with m.FSM():
+            with m.State("IDLE"):
+                with m.If(sending):
+                    m.d.sync += [
+                        # Send command byte
+                        l.eq(0),
+                        serial.tx.data.eq(cmd[:8]),
+                        serial.tx.ack.eq(1)
+                    ]
+                    # Move command takes 4 bytes of parameters
+                    with m.If(cmd[:8] == 137):
+                        m.d.sync += l.eq(4)
+                    m.next = "SEND"
+            with m.State("SEND"):
+                m.d.sync += serial.tx.ack.eq(0)
+                with m.If(serial.tx.rdy & ~serial.tx.ack):
+                    with m.If(l == 0):
+                        m.d.sync += sending.eq(0)
+                        m.next = "IDLE"
+                    with m.Else():
+                        m.d.sync += [
+                            # Send parameter byte
+                            l.eq(l - 1),
+                            cmd.eq(cmd[8:]),
+                            serial.tx.data.eq(cmd[8:16]),
+                            serial.tx.ack.eq(1)
+                        ]
 
         return m
 
