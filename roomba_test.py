@@ -36,8 +36,11 @@ class RoombaTest(Elaboratable):
         do_max = 136
         move = 137
         motors = 138
+        set_leds = 139
+        song = 140
+        play = 141
         read_sensors = 142
-        dock = 147
+        dock = 143
 
         # Parameters and times
         speed = 200
@@ -59,6 +62,8 @@ class RoombaTest(Elaboratable):
         cmd = Signal(40)
         l = Signal(3)
         sending = Signal(reset=0)
+        sensor = Signal(40)
+        i = Signal(4)
 
         # Control state machine
         with m.FSM():
@@ -229,6 +234,14 @@ class RoombaTest(Elaboratable):
                             serial.tx.data.eq(cmd[8:16]),
                             serial.tx.ack.eq(1)
                         ]
+
+        # Read sensor data
+        with m.If(serial.rx.rdy):
+            m.d.sync += sensor.word_select(i, 8).eq(serial.rx.data)
+            with m.If(i == 9):
+                m.d.sync += i.eq(0)
+            with m.Else():
+                m.d.sync += i.eq(i + 1)
 
         return m
 
