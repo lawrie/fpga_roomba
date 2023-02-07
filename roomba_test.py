@@ -12,18 +12,35 @@ roomba_pmod= [
 class RoombaTest(Elaboratable):
     def elaborate(self, platform):
 
+        # Pins
         uart    = platform.request("uart")
         leds    = Cat([platform.request("led", i) for i in range(2,4)])
+        roomba = platform.request("roomba")
+        btn1 = platform.request("button", 0)
+        btn2 = platform.request("button", 1)
+
+        # Uart parameters
         clk_freq = int(platform.default_clk_frequency)
         baud = 115200
         divisor = int(clk_freq // baud)
-        roomba = platform.request("roomba")
-        btn = platform.request("button", 0)
 
-        speed = 200
+        # Roomba commands
         start = 128
+        set_baud = 129
         control = 130
+        safe = 131
+        full = 132
+        sleep = 133
+        spot = 134
+        clean = 135
+        do_max = 136
         move = 137
+        motors = 138
+        read_sensors = 142
+        dock = 147
+
+        # Parameters and times
+        speed = 200
         turn_time = 2.5
         forward_time = 5
         wake_time = 2
@@ -34,24 +51,26 @@ class RoombaTest(Elaboratable):
         # Create the uart
         m.submodules.serial = serial = AsyncSerial(divisor=divisor, pins=uart)
 
-        m.d.comb += [
-            # Always allow reads
-            serial.rx.ack.eq(1),
-        ]
+        # Always allow reads
+        m.d.comb += serial.rx.ack.eq(1)
 
+        # Signals
         cnt = Signal(28, reset=0)
         cmd = Signal(40)
         l = Signal(3)
         sending = Signal(reset=0)
 
+        # Control state machine
         with m.FSM():
             with m.State("BUTTON"):
                 m.d.sync += [
                     leds[0].eq(0),
                     leds[1].eq(0)
                 ]
-                with m.If(btn):
+                with m.If(btn1):
                     m.next = "BEGIN"
+                with m.If(btn2):
+                    m.next = "DOCK"
             with m.State("BEGIN"):
                 m.d.sync += [
                     serial.tx.ack.eq(0),
@@ -172,7 +191,17 @@ class RoombaTest(Elaboratable):
             with m.State("STOP"):
                 with m.If(~sending):
                     m.next = "BUTTON"
+            with m.State("DOCK"):
+                m.d.sync += [
+                    # Send dock
+                    cnt.eq(0),
+                    cmd[:8].eq(dock),
+                    l.eq(0),
+                    sending.eq(1)
+                ]
+                m.next = "BUTTON"
 
+        # Send command state machine
         with m.FSM():
             with m.State("IDLE"):
                 with m.If(sending):
