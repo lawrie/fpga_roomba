@@ -7,9 +7,13 @@ import serial
 dd = 18
 baud = 115200
 speed = 200
+turn_time = 2.3
 
-# set up the serial connection to the Roomba
-ser = serial.Serial('/dev/serial0', baud, timeout=1)
+led_bits = 0x01
+power_color = 255
+power_intensity = 128
+
+song_bytes = [67, 16, 67, 16, 67, 16, 64, 64, 66, 16, 66, 16, 66, 16, 63, 64]
 
 def baudrate(hz):
   ser.write(bytes([129, hz]))
@@ -62,9 +66,18 @@ def stop():
 def clean():
   ser.write(chr(135))
 
+def set_leds():
+  ser.write(bytes([139, led_bits, power_color, power_intensity]))
+
+def song(n):
+  ser.write(bytes([140, n] + [len(song_bytes) // 2] +   song_bytes))
+
+def play(n):
+  ser.write(bytes([141] + [n]))
+
 def updatesensors():
   ser.write(bytes([142, 1]))
-  time.sleep(0.5)
+  time.sleep(0.1)
   sensors = ser.read(10)
   while len(sensors) == 10:
     temp = ser.read(10)
@@ -93,29 +106,46 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(dd, GPIO.OUT)
 
 # Wake up roomba
-GPIO.output(dd, GPIO.HIGH)
-time.sleep(0.1)
 GPIO.output(dd, GPIO.LOW)
-time.sleep(3)
+time.sleep(0.1)
+GPIO.output(dd, GPIO.HIGH)
+time.sleep(2)
 
-# Start the interface
+# set up the serial connection to the Roomba
+ser = serial.Serial('/dev/serial0', baud, timeout=1)
+
+# Start the interface, and switch to full mode
 start()
 control()
-time.sleep(0.5)
+full()
+time.sleep(0.25)
 
+# Define a song
+song(0)
+
+# Drive forward and turn, twice
 for i in range(2):
   # drive forward at a speed of 200 mm/s
   forward()
 
-  # wait for the Roomba to drive for a short period of time
-  time.sleep(5)
+  # Read sensors while driving forward
+  for j in range(5):
+    sensors = updatesensors()
+    # Play a sound if an obstacle is hit
+    if (sensors[0] != 0):
+      print("Sensors: ", sensors[0])
+      play(0)
 
-  # stop the Roomba
+  # Stop the Roomba
   stop()
 
+  # Turn 180 degrees
   spinleft()
-  time.sleep(2.3)
+  time.sleep(turn_time)
   stop()
+
+# Power down
+sleep()
 
 # close the serial connection
 ser.close()
