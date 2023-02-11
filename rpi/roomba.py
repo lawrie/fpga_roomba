@@ -24,7 +24,7 @@ def forward():
 def backward():
   ser.write(bytes([137,(-speed >> 8) & 0xff, -speed & 0xff, 0x80, 0]))
 
-def arc(r):
+def arc(radius):
   ser.write(bytes([137, speed >> 8 & 0xff, speed & 0xff, radius >> 8 & 0xff,  + radius & 0xff]))
 
 def spinleft():
