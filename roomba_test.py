@@ -11,6 +11,18 @@ roomba_pmod= [
             Subsignal("dd",      Pins("4", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
+breaker_pmod= [
+    Resource("breaker", 0,
+            Subsignal("led1",      Pins("7", dir="o", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("led2",      Pins("1", dir="o", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("led3",      Pins("2", dir="o", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("led4",      Pins("3", dir="o", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("led5",      Pins("8", dir="o", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("btn1",      Pins("9", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("btn2",      Pins("4", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("btn3",      Pins("10", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")))
+]
+
 class RoombaTest(Elaboratable):
     def elaborate(self, platform):
 
@@ -18,8 +30,13 @@ class RoombaTest(Elaboratable):
         uart    = platform.request("uart")
         leds    = Cat([platform.request("led", i) for i in range(2,4)])
         roomba = platform.request("roomba")
+        breaker = platform.request("breaker")
         btn1 = platform.request("button", 0)
         btn2 = platform.request("button", 1)
+        btn3 = breaker.btn1
+        btn4 = breaker.btn2
+        btn5 = breaker.btn3
+
 
         # Uart parameters
         clk_freq = int(platform.default_clk_frequency)
@@ -61,38 +78,47 @@ class RoombaTest(Elaboratable):
 
         # Signals
         cnt = Signal(28, reset=0)
-        cmd = Signal(40)
-        l = Signal(3)
+        cmd = Signal(35 * 8)
+        l = Signal(6)
+        num_notes = Signal(5)
         sending = Signal(reset=0)
         sensor = Signal(40)
         i = Signal(4)
 
         # Set leds to to bump sensors
         #m.d.comb += [
-        #    leds[0].eq(sensor[0]),
-        #    leds[1].eq(sensor[1])
+        #    breaker.led4.eq(sensor[0]),
+        #    breaker.led5.eq(sensor[1])
         #]
 
         # Create debouncers for the buttons
         m.submodules.deb1 = deb1 = Debouncer()
         m.submodules.deb2 = deb2 = Debouncer()
+        m.submodules.deb3 = deb3 = Debouncer()
+        m.submodules.deb4 = deb4 = Debouncer()
+        m.submodules.deb5 = deb5 = Debouncer()
 
         m.d.comb += [
             deb1.btn.eq(btn1),
-            deb2.btn.eq(btn2)
+            deb2.btn.eq(btn2),
+            deb3.btn.eq(btn3),
+            deb4.btn.eq(btn4),
+            deb5.btn.eq(btn5)
         ]
 
         # Control state machine
         with m.FSM():
             with m.State("BUTTON"):
-                #m.d.sync += [
-                #    leds[0].eq(0),
-                #    leds[1].eq(0)
-                #]
                 with m.If(deb1.btn_up):
                     m.next = "BEGIN"
                 with m.If(deb2.btn_up):
+                    m.next = "SLEEP"
+                with m.If(deb3.btn_up):
                     m.next = "SENSORS"
+                with m.If(deb4.btn_up):
+                    m.next = "SONG"
+                with m.If(deb5.btn_up):
+                    m.next = "PLAY"
             with m.State("BEGIN"):
                 m.d.sync += [
                     serial.tx.ack.eq(0),
@@ -122,7 +148,7 @@ class RoombaTest(Elaboratable):
                         cmd[:8].eq(control),
                         sending.eq(1)
                     ]
-                    m.next = "CONTROL"
+                    m.next = "FULL"
             with m.State("CONTROL"):
                 with m.If(~sending):
                     m.d.sync += [
@@ -146,10 +172,7 @@ class RoombaTest(Elaboratable):
                     ]
                     m.next = "FORWARD"
             with m.State("FORWARD"):
-                m.d.sync += [
-                    cnt.eq(cnt + 1),
-                    #leds[0].eq(1)
-                ]
+                m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
                 with m.If(cnt == (clk_freq * forward_time)):
                     m.d.sync += [
@@ -179,10 +202,7 @@ class RoombaTest(Elaboratable):
                     ]
                     m.next = "FORWARD2"
             with m.State("FORWARD2"):
-                m.d.sync += [
-                    cnt.eq(cnt + 1),
-                    #leds[1].eq(1)
-                ]
+                m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
                 with m.If(cnt == (clk_freq * 5)):
                     m.d.sync += [
@@ -223,17 +243,60 @@ class RoombaTest(Elaboratable):
                 m.next = "BUTTON"
             with m.State("SENSORS"):
                 m.d.sync += [
+                    breaker.led1.eq(1),
                     cmd[:8].eq(read_sensors),
                     cmd[8:16].eq(1), # read 10 bytes
                     sending.eq(1),
                     leds[0].eq(1)
                 ]
-                m.next = "SENSOR_WAIT"   
-            with m.State("SENSOR_WAIT"):
+                m.next = "WAIT"   
+            with m.State("WAIT"):
                 m.d.sync += cnt.eq(cnt + 1)
                 with m.If(cnt == int(clk_freq * 0.5)):
                     m.d.sync += cnt.eq(0)
                     m.next = "BUTTON"
+            with m.State("SLEEP"):
+                m.d.sync += [
+                    breaker.led2.eq(1),
+                    cmd[:8].eq(sleep),
+                    sending.eq(1)
+                ]
+                m.next = "WAIT"
+            with m.State("SONG"):
+                m.d.sync += [
+                    breaker.led3.eq(1),
+                    num_notes.eq(4),
+                    cmd[:8].eq(song),
+                    cmd[8:16].eq(0), # Song 0
+                    cmd[16:24].eq(4),
+                    cmd[24:32].eq(67),
+                    cmd[32:40].eq(16),
+                    cmd[40:48].eq(67),
+                    cmd[48:56].eq(16),
+                    cmd[56:64].eq(67),
+                    cmd[64:72].eq(16),
+                    cmd[72:80].eq(64),
+                    cmd[80:88].eq(64),
+                    sending.eq(1)
+                ]
+                m.next = "WAIT"
+            with m.State("PLAY"):
+                m.d.sync += [
+                    breaker.led4.eq(1),
+                    cmd[:8].eq(play),
+                    cmd[8:16].eq(0), # Song 0
+                    sending.eq(1)
+                ]
+                m.next = "WAIT"
+            with m.State("LEDS"):
+                m.d.sync += [
+                    breaker.led5.eq(1),
+                    cmd[:8].eq(set_leds),
+                    cmd[8:16].eq(1), # ledbits, dirt detected
+                    cmd[16:24].eq(0), # power color, green
+                    cmd[24:32].eq(128) # power intensity
+                ]
+                m.next = "WAIT"
 
         # Send command state machine
         with m.FSM():
@@ -253,6 +316,8 @@ class RoombaTest(Elaboratable):
                         m.d.sync += l.eq(1)
                     with m.Elif(cmd[:8] == set_leds):
                         m.d.sync += l.eq(3)
+                    with m.Elif(cmd[:8] == song):
+                        m.d.sync += l.eq((num_notes << 1) + 2)
                     m.next = "SEND"
             with m.State("SEND"):
                 m.d.sync += serial.tx.ack.eq(0)
@@ -283,5 +348,6 @@ class RoombaTest(Elaboratable):
 if __name__ == "__main__":
     platform = BlackIceMXPlatform()
     platform.add_resources(roomba_pmod)
+    platform.add_resources(breaker_pmod)
     platform.build(RoombaTest(), do_program=True)
 
