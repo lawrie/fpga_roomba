@@ -24,6 +24,13 @@ breaker_pmod= [
             Subsignal("btn3",      Pins("10", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
+pmod_led8 = [
+    Resource("led8", 0,
+        Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",1))),
+        Attrs(IO_STANDARD="SB_LVCMOS"))
+]
+
+
 class RoombaTest(Elaboratable):
     def elaborate(self, platform):
 
@@ -37,6 +44,8 @@ class RoombaTest(Elaboratable):
         btn3 = breaker.btn1
         btn4 = breaker.btn2
         btn5 = breaker.btn3
+        led8 = platform.request("led8")
+        #leds8 = Cat([led8.leds[i] for i in range(8)])
 
         # Uart parameters
         clk_freq = int(platform.default_clk_frequency)
@@ -85,6 +94,7 @@ class RoombaTest(Elaboratable):
         cmd = Array(Signal(8) for _ in range(35))
         l = Signal(6)
         j = Signal.like(l)
+        k = Signal.like(l)
         num_notes = Signal(5)
         sending = Signal(reset=0)
         sensor = Signal(40)
@@ -121,6 +131,15 @@ class RoombaTest(Elaboratable):
             deb5.btn.eq(btn5)
         ]
 
+        rom = [drive,0,200,0,1]
+        mem = Memory(width=8, depth=len(rom), init=rom)
+        m.submodules.r = r = mem.read_port()
+
+        addr = Signal(8)
+        m.d.comb += r.addr.eq(addr)
+
+        #m.d.sync += led8.eq(addr)
+
         # Functions to send commands
         def send(c):
             m.d.sync += [
@@ -148,15 +167,15 @@ class RoombaTest(Elaboratable):
             do_drive(speed, C(0x0001, 16))
 
         # Set signal l to the number of data bytes for current command
-        def set_l():
-            with m.If(cmd[0] == drive):
+        def set_l(c):
+            with m.If(c == drive):
                 m.d.sync += l.eq(4)
-            with m.Elif((cmd[0] == read_sensors) | (cmd[0] == play) |
-                        (cmd[0] == set_baud) | (cmd[0] == motors)):
+            with m.Elif((c == read_sensors) | (c == play) |
+                        (c == set_baud) | (c == motors)):
                 m.d.sync += l.eq(1)
-            with m.Elif(cmd[0] == set_leds):
+            with m.Elif(c == set_leds):
                 m.d.sync += l.eq(3)
-            with m.Elif(cmd[0] == song):
+            with m.Elif(c == song):
                 m.d.sync += l.eq((num_notes << 1) + 2)
             with m.Else():
                 m.d.sync += l.eq(0)
@@ -173,7 +192,7 @@ class RoombaTest(Elaboratable):
                 with m.If(deb4.btn_up):
                     m.next = "SONG"
                 with m.If(deb5.btn_up):
-                    m.next = "PLAY"
+                    m.next = "ROM"
             with m.State("BEGIN"):
                 m.d.sync += [
                     # Set device detect low to wake-up Roomba
@@ -271,14 +290,15 @@ class RoombaTest(Elaboratable):
                 ]
                 for n in range(len(song_bytes)):
                   m.d.sync += cmd[n+3].eq(song_bytes[n])
-                m.next = "WAIT"
+                m.next = "PLAY"
             with m.State("PLAY"):
-                send(play)
-                m.d.sync += [
-                    breaker.led4.eq(1),
-                    cmd[1].eq(0), # Song 0
-                ]
-                m.next = "WAIT"
+                with m.If(~sending):
+                    send(play)
+                    m.d.sync += [
+                        breaker.led4.eq(1),
+                        cmd[1].eq(0), # Song 0
+                    ]
+                    m.next = "WAIT"
             with m.State("LEDS"):
                 send(set_leds)
                 m.d.sync += [
@@ -288,6 +308,38 @@ class RoombaTest(Elaboratable):
                     cmd[3].eq(128) # power intensity
                 ]
                 m.next = "WAIT"
+            with m.State("ROM"):
+                with m.If(addr < len(rom)):
+                    m.d.sync += [
+                        cmd[0].eq(r.data),
+                        k.eq(0),
+                        addr.eq(addr + 1)
+                    ]
+                    set_l(r.data)
+                    m.next = "PARAM0"
+                with m.Else():
+                    m.d.sync += addr.eq(0)
+                    m.next = "BUTTON"
+            with m.State("PARAM0"):
+                m.next = "PARAM"
+            with m.State("PARAM"):
+                with m.If(k == l):
+                    m.d.sync += [
+                        sending.eq(1),
+                        cnt.eq(0)
+                    ]
+                    m.next = "EXEC"
+                with m.Else():
+                    m.d.sync += [
+                        k.eq(k + 1),
+                        cmd[k+1].eq(r.data),
+                        led8.eq(r.data),
+                        addr.eq(addr + 1)
+                    ]
+                    m.next = "PARAM0"
+            with m.State("EXEC"):
+                with m.If(~sending):
+                    m.next = "ROM"
 
         # Send command state machine
         with m.FSM():
@@ -300,7 +352,7 @@ class RoombaTest(Elaboratable):
                         serial.tx.ack.eq(1)
                     ]
                     # Set l to number of parameter bytes for the command
-                    set_l()
+                    set_l(cmd[0])
                     m.next = "SEND"
             with m.State("SEND"):
                 m.d.sync += serial.tx.ack.eq(0)
@@ -331,5 +383,6 @@ if __name__ == "__main__":
     platform = BlackIceMXPlatform()
     platform.add_resources(roomba_pmod)
     platform.add_resources(breaker_pmod)
+    platform.add_resources(pmod_led8)
     platform.build(RoombaTest(), do_program=True)
 

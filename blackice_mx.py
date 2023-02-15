@@ -28,7 +28,7 @@ class BlackIceMXPlatform(IceCorePlatform):
     connectors  = [
         # Double Pmod pin mapping
         Connector("pmod", 0, PMOD2 + PMOD1),  # PMOD1/2
-        Connector("pmod", 1, PMOD3 + PMOD4),  # PMOD3/4
+        Connector("pmod", 1, PMOD4 + PMOD3),  # PMOD3/4
         Connector("pmod", 2, PMOD5 + PMOD6),  # PMOD5/6
         Connector("pmod", 3, PMOD7 + PMOD8),  # PMOD7/8
         Connector("pmod", 4, PMOD9 + PMOD10),  # PMOD9/10
