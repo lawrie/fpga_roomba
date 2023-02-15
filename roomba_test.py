@@ -62,11 +62,11 @@ class RoombaTest(Elaboratable):
         dock = 143
 
         # Parameters and times
-        speed = 200
-        turn_time = 0.7 + (320 / speed)
-        forward_time = 1000 / speed
-        print("Turn time: ", turn_time)
-        print("Forward time: ", forward_time)
+        init_speed = 200
+        init_turn_time = int((0.7 + (320 / init_speed)) * 1000)
+        init_forward_time = int((1000 / init_speed) * 1000)
+        print("Turn time: ", init_turn_time)
+        print("Forward time: ", init_forward_time)
         wake_time = 2
         wait_time = 1
         dd_time = 0.1
@@ -80,6 +80,7 @@ class RoombaTest(Elaboratable):
         m.d.comb += serial.rx.ack.eq(1)
 
         # Signals
+        dd = Signal(reset=1)
         cnt = Signal(28, reset=0)
         cmd = Array(Signal(8) for _ in range(35))
         l = Signal(6)
@@ -88,6 +89,12 @@ class RoombaTest(Elaboratable):
         sending = Signal(reset=0)
         sensor = Signal(40)
         i = Signal(4)
+        speed = Signal(16, reset=init_speed)
+        turn_time = Signal(16, reset=init_turn_time)
+        forward_time = Signal(16, reset=init_forward_time)
+
+        # Set device detect pin
+        m.d.comb += roomba.dd.eq(dd)
 
         # Song definition
         song_bytes = [67,16,67,16,67,16,64,64]
@@ -123,24 +130,36 @@ class RoombaTest(Elaboratable):
             ]
 
         def do_drive(sp, rad):
+            send(drive)
             m.d.sync += [
-                cnt.eq(0),
-                cmd[0].eq(drive),
-                cmd[1].eq((sp >> 8) & 0xFF),
-                cmd[2].eq(sp & 0xFF),
-                cmd[3].eq((rad >> 8) & 0xFF),
-                cmd[4].eq(rad & 0xFF),
-                sending.eq(1)
+                cmd[1].eq(sp[8:]),
+                cmd[2].eq(sp[:8]),
+                cmd[3].eq(rad[8:]),
+                cmd[4].eq(rad[:8])
             ]
 
         def forward():
-            do_drive(speed, 0x8000)
+            do_drive(speed, C(0x8000, 16))
 
         def stop():
-            do_drive(0, 0x8000)
+            do_drive(C(0,16), C(0x8000, 16))
 
         def spin_left():
-            do_drive(speed, 0x0001)
+            do_drive(speed, C(0x0001, 16))
+
+        # Set signal l to the number of data bytes for current command
+        def set_l():
+            with m.If(cmd[0] == drive):
+                m.d.sync += l.eq(4)
+            with m.Elif((cmd[0] == read_sensors) | (cmd[0] == play) |
+                        (cmd[0] == set_baud) | (cmd[0] == motors)):
+                m.d.sync += l.eq(1)
+            with m.Elif(cmd[0] == set_leds):
+                m.d.sync += l.eq(3)
+            with m.Elif(cmd[0] == song):
+                m.d.sync += l.eq((num_notes << 1) + 2)
+            with m.Else():
+                m.d.sync += l.eq(0)
 
         # Control state machine
         with m.FSM():
@@ -159,13 +178,13 @@ class RoombaTest(Elaboratable):
                 m.d.sync += [
                     # Set device detect low to wake-up Roomba
                     serial.tx.ack.eq(0),
-                    roomba.dd.eq(0),
+                    dd.eq(0),
                     cnt.eq(cnt + 1)
                 ]
                 with m.If(cnt == int(clk_freq * dd_time)):
                     # Set device detect high
                     m.d.sync += [
-                        roomba.dd.eq(1),
+                        dd.eq(1),
                         cnt.eq(0)
                     ]
                     m.next = "WAKE"
@@ -194,28 +213,28 @@ class RoombaTest(Elaboratable):
             with m.State("FORWARD"):
                 m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
-                with m.If(cnt == int(clk_freq * forward_time)):
+                with m.If(cnt == int((clk_freq // 1000)) * forward_time):
                     # Send spinleft
                     spin_left()
                     m.next = "SPINLEFT"
             with m.State("SPINLEFT"):
                 m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
-                with m.If(cnt == int(clk_freq * turn_time)):
+                with m.If(cnt == int((clk_freq // 1000)) * turn_time):
                     # Send forward
                     forward()
                     m.next = "FORWARD2"
             with m.State("FORWARD2"):
                 m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
-                with m.If(cnt == int(clk_freq * forward_time)):
+                with m.If(cnt == int(clk_freq // 1000) * forward_time):
                     # Send spinleft
                     spin_left()
                     m.next = "SPINLEFT2"
             with m.State("SPINLEFT2"):
                 m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
-                with m.If(cnt == int(clk_freq * turn_time)):
+                with m.If(cnt == int(clk_freq // 1000) * turn_time):
                     # Send stop
                     stop()
                     m.next = "STOP"
@@ -227,11 +246,10 @@ class RoombaTest(Elaboratable):
                 send(dock)
                 m.next = "BUTTON"
             with m.State("SENSORS"):
+                send(read_sensors)
                 m.d.sync += [
                     breaker.led1.eq(1),
-                    cmd[0].eq(read_sensors),
                     cmd[1].eq(1), # read 10 bytes
-                    sending.eq(1),
                     leds[0].eq(1)
                 ]
                 m.next = "WAIT"   
@@ -244,29 +262,27 @@ class RoombaTest(Elaboratable):
                 send(sleep)
                 m.next = "WAIT"
             with m.State("SONG"):
+                send(song)
                 m.d.sync += [
                     breaker.led3.eq(1),
                     num_notes.eq(len(song_bytes) // 2),
-                    cmd[0].eq(song),
                     cmd[1].eq(0), # Song 0
-                    cmd[2].eq(len(song_bytes) // 2),
-                    sending.eq(1)
+                    cmd[2].eq(len(song_bytes) // 2)
                 ]
                 for n in range(len(song_bytes)):
                   m.d.sync += cmd[n+3].eq(song_bytes[n])
                 m.next = "WAIT"
             with m.State("PLAY"):
+                send(play)
                 m.d.sync += [
                     breaker.led4.eq(1),
-                    cmd[0].eq(play),
                     cmd[1].eq(0), # Song 0
-                    sending.eq(1)
                 ]
                 m.next = "WAIT"
             with m.State("LEDS"):
+                send(set_leds)
                 m.d.sync += [
                     breaker.led5.eq(1),
-                    cmd[0].eq(set_leds),
                     cmd[1].eq(1), # ledbits, dirt detected
                     cmd[2].eq(0), # power color, green
                     cmd[3].eq(128) # power intensity
@@ -279,21 +295,12 @@ class RoombaTest(Elaboratable):
                 with m.If(sending):
                     m.d.sync += [
                         # Send command byte
-                        l.eq(0),
                         j.eq(0),
                         serial.tx.data.eq(cmd[0]),
                         serial.tx.ack.eq(1)
                     ]
                     # Set l to number of parameter bytes for the command
-                    with m.If(cmd[0] == drive):
-                        m.d.sync += l.eq(4)
-                    with m.Elif((cmd[0] == read_sensors) | (cmd[0] == play) |
-                                (cmd[0] == set_baud) | (cmd[0] == motors)):
-                        m.d.sync += l.eq(1)
-                    with m.Elif(cmd[0] == set_leds):
-                        m.d.sync += l.eq(3)
-                    with m.Elif(cmd[0] == song):
-                        m.d.sync += l.eq((num_notes << 1) + 2)
+                    set_l()
                     m.next = "SEND"
             with m.State("SEND"):
                 m.d.sync += serial.tx.ack.eq(0)
