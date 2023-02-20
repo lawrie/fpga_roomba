@@ -2,6 +2,8 @@ from amaranth import *
 from amaranth_stdio.serial import *
 from amaranth.build import *
 
+from amaranth.lib.cdc import FFSynchronizer
+
 from blackice_mx import *
 
 from debouncer import Debouncer
@@ -31,6 +33,12 @@ pmod_led8 = [
 ]
 
 
+pmod_bt = [
+    Resource("bt", 0,
+        Subsignal("rx", Pins("2", dir="i", conn=("pmod",2))),
+        Attrs(IO_STANDARD="SB_LVCMOS"))
+]
+
 class RoombaTest(Elaboratable):
     def elaborate(self, platform):
 
@@ -45,7 +53,7 @@ class RoombaTest(Elaboratable):
         btn4 = breaker.btn2
         btn5 = breaker.btn3
         led8 = platform.request("led8")
-        #leds8 = Cat([led8.leds[i] for i in range(8)])
+        hm10 = platform.request("bt")
 
         # Uart parameters
         clk_freq = int(platform.default_clk_frequency)
@@ -87,6 +95,20 @@ class RoombaTest(Elaboratable):
 
         # Always allow reads
         m.d.comb += serial.rx.ack.eq(1)
+
+        # Create the bluetooth uart
+        bt_divisor = int(clk_freq // 9600)
+        m.submodules.bt = bt = AsyncSerial(divisor=bt_divisor)
+
+        # Always allow reads
+        m.d.comb += bt.rx.ack.eq(1)
+
+        # Connect the RX pin
+        m.submodules += FFSynchronizer(hm10.rx, bt.rx.i, reset=1)
+
+        # Put received character on leds
+        with m.If(bt.rx.rdy):
+            m.d.sync += led8.eq(bt.rx.data)
 
         # Signals
         dd = Signal(reset=1)
@@ -340,7 +362,7 @@ class RoombaTest(Elaboratable):
                     m.d.sync += [
                         k.eq(k + 1),
                         cmd[k+1].eq(r.data),
-                        led8.eq(r.data),
+                        #led8.eq(r.data),
                         addr.eq(addr + 1)
                     ]
                     m.next = "PARAM0"
@@ -400,5 +422,6 @@ if __name__ == "__main__":
     platform.add_resources(roomba_pmod)
     platform.add_resources(breaker_pmod)
     platform.add_resources(pmod_led8)
+    platform.add_resources(pmod_bt)
     platform.build(RoombaTest(), do_program=True)
 
