@@ -102,6 +102,7 @@ class RoombaTest(Elaboratable):
         speed = Signal(16, reset=init_speed)
         turn_time = Signal(16, reset=init_turn_time)
         forward_time = Signal(16, reset=init_forward_time)
+        millis = Signal(16)
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -131,7 +132,7 @@ class RoombaTest(Elaboratable):
             deb5.btn.eq(btn5)
         ]
 
-        rom = [drive,0,200,0,1]
+        rom = [drive, 0, 200, 0, 1, 0, 0, 8, play, 0, drive, 0, 0, 0x80, 0]
         mem = Memory(width=8, depth=len(rom), init=rom)
         m.submodules.r = r = mem.read_port()
 
@@ -177,6 +178,8 @@ class RoombaTest(Elaboratable):
                 m.d.sync += l.eq(3)
             with m.Elif(c == song):
                 m.d.sync += l.eq((num_notes << 1) + 2)
+            with m.Elif(c[7] == 0):
+                m.d.sync += l.eq(2)
             with m.Else():
                 m.d.sync += l.eq(0)
 
@@ -324,11 +327,15 @@ class RoombaTest(Elaboratable):
                 m.next = "PARAM"
             with m.State("PARAM"):
                 with m.If(k == l):
-                    m.d.sync += [
-                        sending.eq(1),
-                        cnt.eq(0)
-                    ]
-                    m.next = "EXEC"
+                    with m.If(cmd[0][7]):
+                        m.d.sync += sending.eq(1)
+                        m.next = "EXEC"
+                    with m.Else():
+                        m.d.sync += [
+                            millis.eq(Cat(cmd[1], cmd[2])),
+                            cnt.eq(0)
+                        ]
+                        m.next = "COUNTDOWN"
                 with m.Else():
                     m.d.sync += [
                         k.eq(k + 1),
@@ -340,6 +347,15 @@ class RoombaTest(Elaboratable):
             with m.State("EXEC"):
                 with m.If(~sending):
                     m.next = "ROM"
+            with m.State("COUNTDOWN"):
+                m.d.sync += cnt.eq(cnt + 1)
+                with m.If(cnt == int(clk_freq // 1000)):
+                    m.d.sync += [
+                        millis.eq(millis - 1),
+                        cnt.eq(0)
+                    ]
+                    with m.If(millis == 1):
+                        m.next = "ROM"
 
         # Send command state machine
         with m.FSM():
