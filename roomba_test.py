@@ -379,6 +379,24 @@ class RoombaTest(Elaboratable):
                     with m.If(millis == 1):
                         m.next = "ROM"
 
+        # Receive Bluetooth commands
+        with m.FSM():
+            with m.State("IDLE"):
+                with m.If(bt.rx.rdy):
+                    with m.Switch(bt.rx.data):
+                        with m.Case(ord('f')):
+                            forward()
+                            m.next = "WAIT"
+                        with m.Case(ord('l')):
+                            spin_left()
+                            m.next = "WAIT"
+                        with m.Case(ord('s')):
+                            stop()
+                            m.next = "WAIT"
+            with m.State("WAIT"):
+                with m.If(~sending):
+                    m.next = "IDLE"
+
         # Send command state machine
         with m.FSM():
             with m.State("IDLE"):
