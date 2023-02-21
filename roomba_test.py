@@ -183,11 +183,17 @@ class RoombaTest(Elaboratable):
         def forward():
             do_drive(speed, C(0x8000, 16))
 
+        def backward():
+            do_drive(-speed, C(0x8000, 16))
+
         def stop():
             do_drive(C(0,16), C(0x8000, 16))
 
         def spin_left():
             do_drive(speed, C(0x0001, 16))
+
+        def spin_right():
+            do_drive(speed, C(0xFFFF, 16))
 
         # Set signal l to the number of data bytes for current command
         def set_l(c):
@@ -207,17 +213,6 @@ class RoombaTest(Elaboratable):
 
         # Control state machine
         with m.FSM():
-            with m.State("BUTTON"):
-                with m.If(deb1.btn_up):
-                    m.next = "BEGIN"
-                with m.If(deb2.btn_up):
-                    m.next = "SLEEP"
-                with m.If(deb3.btn_up):
-                    m.next = "SENSORS"
-                with m.If(deb4.btn_up):
-                    m.next = "SONG"
-                with m.If(deb5.btn_up):
-                    m.next = "ROM"
             with m.State("BEGIN"):
                 m.d.sync += [
                     # Set device detect low to wake-up Roomba
@@ -251,9 +246,33 @@ class RoombaTest(Elaboratable):
             with m.State("FULL"):
                 m.d.sync += cnt.eq(cnt + 1)
                 with m.If(cnt == int(clk_freq * wait_time)):
-                    # Send drive command
-                    forward()
-                    m.next = "FORWARD"
+                    m.next = "SONG"
+            with m.State("SONG"):
+                send(song)
+                m.d.sync += [
+                    breaker.led3.eq(1),
+                    num_notes.eq(len(song_bytes) // 2),
+                    cmd[1].eq(0), # Song 0
+                    cmd[2].eq(len(song_bytes) // 2)
+                ]
+                for n in range(len(song_bytes)):
+                  m.d.sync += cmd[n+3].eq(song_bytes[n])
+                m.next = "PLAY"
+            with m.State("BUTTON"):
+                with m.If(deb1.btn_up):
+                    m.next = "MOVE"
+                with m.If(deb2.btn_up):
+                    m.next = "SLEEP"
+                with m.If(deb3.btn_up):
+                    m.next = "SENSORS"
+                with m.If(deb4.btn_up):
+                    m.next = "SONG"
+                with m.If(deb5.btn_up):
+                    m.next = "ROM"
+            with m.State("MOVE"):
+                # Send drive command
+                forward()
+                m.next = "FORWARD"
             with m.State("FORWARD"):
                 m.d.sync += cnt.eq(cnt + 1)
                 # Wait 5 seconds
@@ -304,18 +323,7 @@ class RoombaTest(Elaboratable):
                     m.next = "BUTTON"
             with m.State("SLEEP"):
                 send(sleep)
-                m.next = "WAIT"
-            with m.State("SONG"):
-                send(song)
-                m.d.sync += [
-                    breaker.led3.eq(1),
-                    num_notes.eq(len(song_bytes) // 2),
-                    cmd[1].eq(0), # Song 0
-                    cmd[2].eq(len(song_bytes) // 2)
-                ]
-                for n in range(len(song_bytes)):
-                  m.d.sync += cmd[n+3].eq(song_bytes[n])
-                m.next = "PLAY"
+                m.next = "WAIT_UART"
             with m.State("PLAY"):
                 with m.If(~sending):
                     send(play)
@@ -323,7 +331,10 @@ class RoombaTest(Elaboratable):
                         breaker.led4.eq(1),
                         cmd[1].eq(0), # Song 0
                     ]
-                    m.next = "WAIT"
+                    m.next = "WAIT_UART"
+            with m.State("WAIT_UART"):
+                with m.If(~sending):
+                    m.next = "BUTTON"
             with m.State("LEDS"):
                 send(set_leds)
                 m.d.sync += [
@@ -332,7 +343,7 @@ class RoombaTest(Elaboratable):
                     cmd[2].eq(0), # power color, green
                     cmd[3].eq(128) # power intensity
                 ]
-                m.next = "WAIT"
+                m.next = "WAIT_UART"
             with m.State("ROM"):
                 with m.If(addr < len(rom)):
                     m.d.sync += [
@@ -386,6 +397,12 @@ class RoombaTest(Elaboratable):
                     with m.Switch(bt.rx.data):
                         with m.Case(ord('f')):
                             forward()
+                            m.next = "WAIT"
+                        with m.Case(ord('b')):
+                            backward()
+                            m.next = "WAIT"
+                        with m.Case(ord('r')):
+                            spin_right()
                             m.next = "WAIT"
                         with m.Case(ord('l')):
                             spin_left()
