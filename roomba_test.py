@@ -11,7 +11,8 @@ from debouncer import Debouncer
 # Connect the Roomba Device Detect pin
 roomba_pmod= [
     Resource("roomba", 0,
-            Subsignal("dd",      Pins("4", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
+            Subsignal("dd",      Pins("10", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("rx",      Pins("9", dir="i", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
 # iCEBreaker Pmod used for extra buttons and Leds
@@ -28,9 +29,15 @@ breaker_pmod= [
 ]
 
 # Digilent 8LED Pmod
-pmod_led8 = [
-    Resource("led8", 0,
-        Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",1))),
+pmod_led8_1 = [
+    Resource("led8_1", 0,
+        Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",2))),
+        Attrs(IO_STANDARD="SB_LVCMOS"))
+]
+
+pmod_led8_2 = [
+    Resource("led8_2", 0,
+        Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",3))),
         Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
 
@@ -38,7 +45,7 @@ pmod_led8 = [
 # Pmod for HM-10 BLE device
 pmod_bt = [
     Resource("bt", 0,
-        Subsignal("rx", Pins("2", dir="i", conn=("pmod",2))),
+        Subsignal("rx", Pins("8", dir="i", conn=("pmod",1))),
         Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
 
@@ -56,7 +63,9 @@ class RoombaTest(Elaboratable):
         btn3 = breaker.btn1
         btn4 = breaker.btn2
         btn5 = breaker.btn3
-        led8 = platform.request("led8")
+        led8_1 = platform.request("led8_1")
+        led8_2 = platform.request("led8_2")
+        led16 = Cat(led8_1, led8_2)
         hm10 = platform.request("bt") # HM-10 Bluetooth device
 
         # Uart parameters
@@ -110,9 +119,15 @@ class RoombaTest(Elaboratable):
         # Connect the RX pin
         m.submodules += FFSynchronizer(hm10.rx, bt.rx.i, reset=1)
 
-        # Put received character on leds
-        with m.If(bt.rx.rdy):
-            m.d.sync += led8.eq(bt.rx.data)
+        # Create uart for LDRobot LD19
+        ld19_divisor = int(clk_freq // 230400)
+        m.submodules.ld19 = ld19 = AsyncSerial(divisor=ld19_divisor)
+        
+        # Always allow reads
+        m.d.comb += ld19.rx.ack.eq(1)
+
+        # Connect the RX pin
+        m.submodules += FFSynchronizer(roomba.rx, ld19.rx.i, reset=1)
 
         # Signals
         dd = Signal(reset=1)
@@ -123,12 +138,18 @@ class RoombaTest(Elaboratable):
         k = Signal.like(l)
         num_notes = Signal(5)
         sending = Signal(reset=0)
-        sensor = Signal(40)
+        sensor = Signal(80)
         i = Signal(4)
         speed = Signal(16, reset=init_speed)
         turn_time = Signal(16, reset=init_turn_time)
         forward_time = Signal(16, reset=init_forward_time)
         millis = Signal(16)
+        ii = Signal(6)
+        lidar = Signal(8 * 47)
+        start_angle = Signal(16, reset=0xffff)
+        distance = Signal(16)
+        intensity = Signal(8)
+        last_byte = Signal(8)
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -225,6 +246,18 @@ class RoombaTest(Elaboratable):
             with m.Else():
                 m.d.sync += l.eq(0)
 
+        def play_song(n):
+            send(play)
+            m.d.sync += cmd[1].eq(n)
+
+        # Check disatance to obstacle
+        with m.If(ii == 46):
+            with m.If(lidar[32:48] < 0x0080):
+                m.d.sync += led16.eq(lidar[48:64])
+                m.d.sync += distance.eq(lidar[48:64])
+                with m.If(lidar[48:64] < 0x100):
+                    stop()
+
         # Control state machine
         with m.FSM():
             with m.State("BEGIN"):
@@ -264,7 +297,6 @@ class RoombaTest(Elaboratable):
             with m.State("SONG"):
                 send(song)
                 m.d.sync += [
-                    breaker.led3.eq(1),
                     num_notes.eq(len(song_bytes) // 2),
                     cmd[1].eq(0), # Song 0
                     cmd[2].eq(len(song_bytes) // 2)
@@ -325,7 +357,6 @@ class RoombaTest(Elaboratable):
             with m.State("SENSORS"):
                 send(read_sensors)
                 m.d.sync += [
-                    breaker.led1.eq(1),
                     cmd[1].eq(1), # read 10 bytes
                     leds[0].eq(1)
                 ]
@@ -340,11 +371,7 @@ class RoombaTest(Elaboratable):
                 m.next = "WAIT_UART"
             with m.State("PLAY"):
                 with m.If(~sending):
-                    send(play)
-                    m.d.sync += [
-                        breaker.led4.eq(1),
-                        cmd[1].eq(0), # Song 0
-                    ]
+                    play_song(0)
                     m.next = "WAIT_UART"
             with m.State("WAIT_UART"):
                 with m.If(~sending):
@@ -387,7 +414,6 @@ class RoombaTest(Elaboratable):
                     m.d.sync += [
                         k.eq(k + 1),
                         cmd[k+1].eq(r.data),
-                        #led8.eq(r.data),
                         addr.eq(addr + 1)
                     ]
                     m.next = "PARAM0"
@@ -423,6 +449,9 @@ class RoombaTest(Elaboratable):
                             m.next = "WAIT"
                         with m.Case(ord('s')):
                             stop()
+                            m.next = "WAIT"
+                        with m.Case(ord('p')):
+                            play_song(0)
                             m.next = "WAIT"
             with m.State("WAIT"):
                 with m.If(~sending):
@@ -464,13 +493,27 @@ class RoombaTest(Elaboratable):
             with m.Else():
                 m.d.sync += i.eq(i + 1)
 
+        # Read lidar data
+        with m.If(ld19.rx.rdy):
+            m.d.sync += last_byte.eq(ld19.rx.data)
+            m.d.sync += lidar.word_select(ii, 8).eq(ld19.rx.data)
+            with m.If(ii == 46):
+                m.d.sync += ii.eq(0)
+            with m.Elif((ld19.rx.data == 0x2c) & (last_byte == 0x54)):
+                m.d.sync += ii.eq(2)
+                m.d.sync += lidar[:8].eq(0x54)
+                m.d.sync += breaker.led1.eq(~breaker.led1)
+            with m.Else():
+                m.d.sync += ii.eq(ii + 1)
+
         return m
 
 if __name__ == "__main__":
     platform = BlackIceMXPlatform()
     platform.add_resources(roomba_pmod)
     platform.add_resources(breaker_pmod)
-    platform.add_resources(pmod_led8)
+    platform.add_resources(pmod_led8_1)
+    platform.add_resources(pmod_led8_2)
     platform.add_resources(pmod_bt)
     platform.build(RoombaTest(), do_program=True)
 

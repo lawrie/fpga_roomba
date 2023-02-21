@@ -29,10 +29,10 @@ class BlackIceMXPlatform(IceCorePlatform):
         # Double Pmod pin mapping
         Connector("pmod", 0, PMOD2 + PMOD1),  # PMOD1/2
         Connector("pmod", 1, PMOD4 + PMOD3),  # PMOD3/4
-        Connector("pmod", 2, PMOD5 + PMOD6),  # PMOD5/6
-        Connector("pmod", 3, PMOD7 + PMOD8),  # PMOD7/8
-        Connector("pmod", 4, PMOD9 + PMOD10),  # PMOD9/10
-        Connector("pmod", 5, PMOD11 + PMOD12),  # PMOD11/12
+        Connector("pmod", 2, PMOD6 + PMOD5),  # PMOD5/6
+        Connector("pmod", 3, PMOD8 + PMOD7),  # PMOD7/8
+        Connector("pmod", 4, PMOD10 + PMOD9),  # PMOD9/10
+        Connector("pmod", 5, PMOD12 + PMOD11),  # PMOD11/12
         # MixMod pin mapping
         Connector("mixmod", 0, PMOD1 + MXPINS + PMOD3 + PMOD2 + MXPINS + PMOD4),  # MX1
         Connector("mixmod", 1, PMOD5 + MXPINS + PMOD7 + PMOD6 + MXPINS + PMOD8),  # MX2
