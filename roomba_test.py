@@ -8,6 +8,7 @@ from blackice_mx import *
 
 from debouncer import Debouncer
 
+# Connect the Roomba Device Detect pin
 roomba_pmod= [
     Resource("roomba", 0,
             Subsignal("dd",      Pins("4", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
@@ -26,6 +27,7 @@ breaker_pmod= [
             Subsignal("btn3",      Pins("10", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
+# Digilent 8LED Pmod
 pmod_led8 = [
     Resource("led8", 0,
         Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",1))),
@@ -33,6 +35,7 @@ pmod_led8 = [
 ]
 
 
+# Pmod for HM-10 BLE device
 pmod_bt = [
     Resource("bt", 0,
         Subsignal("rx", Pins("2", dir="i", conn=("pmod",2))),
@@ -40,6 +43,7 @@ pmod_bt = [
 ]
 
 class RoombaTest(Elaboratable):
+    """ Drives a Roomba vacuum cleaner robot via its serial interface """
     def elaborate(self, platform):
 
         # Pins
@@ -53,7 +57,7 @@ class RoombaTest(Elaboratable):
         btn4 = breaker.btn2
         btn5 = breaker.btn3
         led8 = platform.request("led8")
-        hm10 = platform.request("bt")
+        hm10 = platform.request("bt") # HM-10 Bluetooth device
 
         # Uart parameters
         clk_freq = int(platform.default_clk_frequency)
@@ -130,7 +134,7 @@ class RoombaTest(Elaboratable):
         m.d.comb += roomba.dd.eq(dd)
 
         # Song definition
-        song_bytes = [67,16,67,16,67,16,64,64]
+        song_bytes = [67, 16, 67, 16, 67, 16, 64, 64]
 
         # Set leds to to bump sensors
         #m.d.comb += [
@@ -154,14 +158,24 @@ class RoombaTest(Elaboratable):
             deb5.btn.eq(btn5)
         ]
 
-        rom = [drive, 0, 200, 0, 1, 0, 0, 8, play, 0, drive, 0, 0, 0x80, 0]
+        # Create a ROM to do some commands
+        rom = [drive, 0, 200, 0x80, 0, 
+               0, 0, 20,
+               drive, 0, 200, 0, 1, 
+               0, 0, 9, 
+               drive, 0, 200, 0x80, 0,
+               0, 0, 20,
+               drive, 0, 200, 0, 1,
+               0, 0, 9,
+               drive, 0, 0, 0x80, 0
+              ]
+
         mem = Memory(width=8, depth=len(rom), init=rom)
         m.submodules.r = r = mem.read_port()
 
-        addr = Signal(8)
+        # Address needs to go one higher than r.addr
+        addr = Signal(range(len(rom) + 1))
         m.d.comb += r.addr.eq(addr)
-
-        #m.d.sync += led8.eq(addr)
 
         # Functions to send commands
         def send(c):
