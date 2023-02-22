@@ -52,8 +52,8 @@ pmod_bt = [
 ]
 
 angles = [math.radians(0.4 + (x * 0.8)) for x in range(450)]
-sin = [int(math.sin(x) * 128) for x in angles]
-cos = [int(math.cos(x) * 128) for x in angles]
+sin = [int(math.sin(x) * 128) + 128 for x in angles]
+cos = [int(math.cos(x) * 128) + 128 for x in angles]
 
 class RoombaTest(Elaboratable):
     """ Drives a Roomba vacuum cleaner robot via its serial interface """
@@ -159,6 +159,10 @@ class RoombaTest(Elaboratable):
         fi = Signal(6) # Frame index of data frames per scan
         ai = Signal(9) # Angle index, 0 to 449
         pi = Signal(2) # Point index for byte within point data
+        x = Signal(signed(24))
+        y = Signal(signed(24))
+        cos_s = Signal(signed(8))
+        sin_s = Signal(signed(8))
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -212,12 +216,14 @@ class RoombaTest(Elaboratable):
         m.submodules.sin_r = sin_r = sin_mem.read_port()
 
         m.d.comb += sin_r.addr.eq(ai)
+        m.d.comb += sin_s.eq(sin_r.data - 128)
 
         # Create a table of cosines
         cos_mem = Memory(width=8, depth=450, init=cos)
         m.submodules.cos_r = cos_r = cos_mem.read_port()
 
         m.d.comb += cos_r.addr.eq(ai)
+        m.d.comb += cos_s.eq(cos_r.data - 128)
 
         # Memory for distance measurements
         dist_mem = Memory(width=16, depth=450)
@@ -291,7 +297,6 @@ class RoombaTest(Elaboratable):
                 # Set frame index to zero
                 m.d.sync += fi.eq(0)
                 m.d.sync += ai.eq(0)
-                #m.d.sync += led16.eq(lidar[48:64])
                 # Stop if obstacle closer than about 25cm
                 with m.If(lidar[48:64] < 0x100):
                     stop()
@@ -565,15 +570,19 @@ class RoombaTest(Elaboratable):
                         m.d.sync += ai.eq(0)
                     with m.Else():
                         m.d.sync += ai.eq(ai + 1)
+
+                    with m.If(ai == 0):
+                        m.d.sync += led16.eq(y[7:])
+                        #m.d.sync += led16.eq(distance)
                 with m.Else():
                     m.d.sync += pi.eq(pi + 1)
                     with m.If(pi == 1):
                         m.d.sync += [
                             distance.eq(Cat(last_byte, ld19.rx.data)),
-                            dist_w.en.eq(1)
+                            dist_w.en.eq(1),
+                            x.eq(Cat(last_byte, ld19.rx.data) * sin_s),
+                            y.eq(Cat(last_byte, ld19.rx.data) * cos_s)
                         ]
-                        with m.If(ai == 0):
-                            m.d.sync += led16.eq(Cat(last_byte, ld19.rx.data))
 
         return m
 
