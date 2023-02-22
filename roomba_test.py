@@ -136,27 +136,29 @@ class RoombaTest(Elaboratable):
         m.submodules += FFSynchronizer(roomba.rx, ld19.rx.i, reset=1)
 
         # Signals
-        dd = Signal(reset=1)
-        cnt = Signal(28, reset=0)
-        cmd = Array(Signal(8) for _ in range(35))
-        l = Signal(6)
-        j = Signal.like(l)
-        k = Signal.like(l)
-        num_notes = Signal(5)
-        sending = Signal(reset=0)
-        sensor = Signal(80)
-        i = Signal(4)
-        speed = Signal(16, reset=init_speed)
-        turn_time = Signal(16, reset=init_turn_time)
-        forward_time = Signal(16, reset=init_forward_time)
-        millis = Signal(16)
-        ii = Signal(6)
-        lidar = Signal(8 * 47)
-        start_angle = Signal(16, reset=0xffff)
-        distance = Signal(16)
-        intensity = Signal(8)
-        last_byte = Signal(8)
-        index = Signal(6)
+        dd = Signal(reset=1) # Device detect
+        cnt = Signal(28, reset=0) # Time counter
+        cmd = Array(Signal(8) for _ in range(35)) # Current roomba command
+        l = Signal(6) # Command length
+        num_notes = Signal(5) # Number of notes in song
+        sending = Signal(reset=0) # Set when sending bytes to Roomba
+        sensor = Signal(80) # Sensor data
+        speed = Signal(16, reset=init_speed) # Forward and turn speed
+        turn_time = Signal(16, reset=init_turn_time) # Roomba speed in mm/s
+        forward_time = Signal(16, reset=init_forward_time) # Millisecond for forward
+        millis = Signal(16) # Millisecond counter
+        lidar = Signal(8 * 47) # Lidar data
+        start_angle = Signal(16, reset=0xffff) # Start angle from frame
+        distance = Signal(16) # Current distance from frame
+        intensity = Signal(8) # Current intensity from frame
+        last_byte = Signal(8) # Last lidar byte read
+        ci = Signal.like(l) # Command index
+        ri = Signal.like(l) # Rom command index
+        si = Signal(4) # Index for sensor data
+        li = Signal(6) # Lidar index of byte within frame
+        fi = Signal(6) # Frame index of data frames per scan
+        ai = Signal(9) # Angle index, 0 to 449
+        pi = Signal(2) # Point index for byte within point data
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -209,19 +211,27 @@ class RoombaTest(Elaboratable):
         sin_mem = Memory(width=8, depth=450, init=sin)
         m.submodules.sin_r = sin_r = sin_mem.read_port()
 
+        m.d.comb += sin_r.addr.eq(ai)
+
         # Create a table of cosines
         cos_mem = Memory(width=8, depth=450, init=cos)
         m.submodules.cos_r = cos_r = cos_mem.read_port()
+
+        m.d.comb += cos_r.addr.eq(ai)
 
         # Memory for distance measurements
         dist_mem = Memory(width=16, depth=450)
         m.submodules.dist_r = dist_r = dist_mem.read_port()
         m.submodules.dist_w = dist_w = dist_mem.write_port()
 
+        m.d.comb += dist_w.addr.eq(ai)
+
         # Memory for intensity measurements
         int_mem = Memory(width=8, depth=450)
         m.submodules.int_r = int_r = int_mem.read_port()
         m.submodules.int_w = int_w = int_mem.write_port()
+
+        m.d.comb += int_w.addr.eq(ai - 1)
 
         # Functions to send commands
         def send(c):
@@ -275,18 +285,18 @@ class RoombaTest(Elaboratable):
             send(play)
             m.d.sync += cmd[1].eq(n)
 
-        # Check disatance to obstacle
-        with m.If(ld19.rx.rdy & (ii == 46)): # Read checksum
+        # Check distance to obstacle
+        with m.If(ld19.rx.rdy & (li == 46)): # Read checksum
             with m.If(lidar[32:48] < 0x0080): # First frame
                 # Set frame index to zero
-                m.d.sync += index.eq(0)
-                m.d.sync += led16.eq(lidar[48:64])
-                m.d.sync += distance.eq(lidar[48:64])
+                m.d.sync += fi.eq(0)
+                m.d.sync += ai.eq(0)
+                #m.d.sync += led16.eq(lidar[48:64])
                 # Stop if obstacle closer than about 25cm
                 with m.If(lidar[48:64] < 0x100):
                     stop()
             with m.Else():
-                m.d.sync += index.eq(index + 1)
+                m.d.sync += fi.eq(fi + 1)
 
         # Control state machine
         with m.FSM():
@@ -419,7 +429,7 @@ class RoombaTest(Elaboratable):
                 with m.If(addr < len(rom)):
                     m.d.sync += [
                         cmd[0].eq(r.data),
-                        k.eq(0),
+                        ri.eq(0),
                         addr.eq(addr + 1)
                     ]
                     set_l(r.data)
@@ -430,7 +440,7 @@ class RoombaTest(Elaboratable):
             with m.State("PARAM0"):
                 m.next = "PARAM"
             with m.State("PARAM"):
-                with m.If(k == l):
+                with m.If(ri == l):
                     with m.If(cmd[0][7]):
                         m.d.sync += sending.eq(1)
                         m.next = "EXEC"
@@ -442,8 +452,8 @@ class RoombaTest(Elaboratable):
                         m.next = "COUNTDOWN"
                 with m.Else():
                     m.d.sync += [
-                        k.eq(k + 1),
-                        cmd[k+1].eq(r.data),
+                        ri.eq(ri + 1),
+                        cmd[ri+1].eq(r.data),
                         addr.eq(addr + 1)
                     ]
                     m.next = "PARAM0"
@@ -493,7 +503,7 @@ class RoombaTest(Elaboratable):
                 with m.If(sending):
                     m.d.sync += [
                         # Send command byte
-                        j.eq(0),
+                        ci.eq(0),
                         serial.tx.data.eq(cmd[0]),
                         serial.tx.ack.eq(1)
                     ]
@@ -503,38 +513,67 @@ class RoombaTest(Elaboratable):
             with m.State("SEND"):
                 m.d.sync += serial.tx.ack.eq(0)
                 with m.If(serial.tx.rdy & ~serial.tx.ack):
-                    with m.If(j == l):
+                    with m.If(ci == l):
                         m.d.sync += sending.eq(0)
                         m.next = "IDLE"
                     with m.Else():
                         m.d.sync += [
                             # Send parameter byte
-                            j.eq(j + 1),
-                            serial.tx.data.eq(cmd[j + 1]),
+                            ci.eq(ci + 1),
+                            serial.tx.data.eq(cmd[ci + 1]),
                             serial.tx.ack.eq(1)
                         ]
 
         # Read sensor data - 10 byte packets
         with m.If(serial.rx.rdy):
             m.d.sync += leds[1].eq(1)
-            m.d.sync += sensor.word_select(i, 8).eq(serial.rx.data)
-            with m.If(i == 9):
-                m.d.sync += i.eq(0)
+            m.d.sync += sensor.word_select(si, 8).eq(serial.rx.data)
+            with m.If(si == 9):
+                m.d.sync += si.eq(0)
             with m.Else():
-                m.d.sync += i.eq(i + 1)
+                m.d.sync += si.eq(si + 1)
 
+        # Don't write data by default
+        m.d.sync += [
+            dist_w.en.eq(0),
+            int_w.en.eq(0)
+        ]
         # Read lidar data
+
         with m.If(ld19.rx.rdy):
             m.d.sync += last_byte.eq(ld19.rx.data)
-            m.d.sync += lidar.word_select(ii, 8).eq(ld19.rx.data)
-            with m.If(ii == 46):
-                m.d.sync += ii.eq(0)
+            m.d.sync += lidar.word_select(li, 8).eq(ld19.rx.data)
+            with m.If(li == 46):
+                m.d.sync += li.eq(0)
             with m.Elif((ld19.rx.data == 0x2c) & (last_byte == 0x54)):
-                m.d.sync += ii.eq(2)
+                m.d.sync += li.eq(2)
                 m.d.sync += lidar[:8].eq(0x54)
                 m.d.sync += breaker.led1.eq(~breaker.led1)
             with m.Else():
-                m.d.sync += ii.eq(ii + 1)
+                m.d.sync += li.eq(li + 1)
+
+            with m.If(li == 5):
+                m.d.sync += pi.eq(0)
+            with m.Elif((li > 5) & (li < 42)):
+                with m.If(pi == 2):
+                    m.d.sync += [
+                        pi.eq(0),
+                        intensity.eq(ld19.rx.data),
+                        int_w.en.eq(1)
+                    ]
+                    with m.If(ai == 449):
+                        m.d.sync += ai.eq(0)
+                    with m.Else():
+                        m.d.sync += ai.eq(ai + 1)
+                with m.Else():
+                    m.d.sync += pi.eq(pi + 1)
+                    with m.If(pi == 1):
+                        m.d.sync += [
+                            distance.eq(Cat(last_byte, ld19.rx.data)),
+                            dist_w.en.eq(1)
+                        ]
+                        with m.If(ai == 0):
+                            m.d.sync += led16.eq(Cat(last_byte, ld19.rx.data))
 
         return m
 
