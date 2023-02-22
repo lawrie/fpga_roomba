@@ -8,6 +8,8 @@ from blackice_mx import *
 
 from debouncer import Debouncer
 
+import math
+
 # Connect the Roomba Device Detect pin
 roomba_pmod= [
     Resource("roomba", 0,
@@ -48,6 +50,10 @@ pmod_bt = [
         Subsignal("rx", Pins("8", dir="i", conn=("pmod",1))),
         Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
+
+angles = [math.radians(0.4 + (x * 0.8)) for x in range(450)]
+sin = [int(math.sin(x) * 128) for x in angles]
+cos = [int(math.cos(x) * 128) for x in angles]
 
 class RoombaTest(Elaboratable):
     """ Drives a Roomba vacuum cleaner robot via its serial interface """
@@ -150,6 +156,7 @@ class RoombaTest(Elaboratable):
         distance = Signal(16)
         intensity = Signal(8)
         last_byte = Signal(8)
+        index = Signal(6)
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -197,6 +204,24 @@ class RoombaTest(Elaboratable):
         # Address needs to go one higher than r.addr
         addr = Signal(range(len(rom) + 1))
         m.d.comb += r.addr.eq(addr)
+
+        # Create a table of sines
+        sin_mem = Memory(width=8, depth=450, init=sin)
+        m.submodules.sin_r = sin_r = sin_mem.read_port()
+
+        # Create a table of cosines
+        cos_mem = Memory(width=8, depth=450, init=cos)
+        m.submodules.cos_r = cos_r = cos_mem.read_port()
+
+        # Memory for distance measurements
+        dist_mem = Memory(width=16, depth=450)
+        m.submodules.dist_r = dist_r = dist_mem.read_port()
+        m.submodules.dist_w = dist_w = dist_mem.write_port()
+
+        # Memory for intensity measurements
+        int_mem = Memory(width=8, depth=450)
+        m.submodules.int_r = int_r = int_mem.read_port()
+        m.submodules.int_w = int_w = int_mem.write_port()
 
         # Functions to send commands
         def send(c):
@@ -251,12 +276,17 @@ class RoombaTest(Elaboratable):
             m.d.sync += cmd[1].eq(n)
 
         # Check disatance to obstacle
-        with m.If(ii == 46):
-            with m.If(lidar[32:48] < 0x0080):
+        with m.If(ld19.rx.rdy & (ii == 46)): # Read checksum
+            with m.If(lidar[32:48] < 0x0080): # First frame
+                # Set frame index to zero
+                m.d.sync += index.eq(0)
                 m.d.sync += led16.eq(lidar[48:64])
                 m.d.sync += distance.eq(lidar[48:64])
+                # Stop if obstacle closer than about 25cm
                 with m.If(lidar[48:64] < 0x100):
                     stop()
+            with m.Else():
+                m.d.sync += index.eq(index + 1)
 
         # Control state machine
         with m.FSM():
