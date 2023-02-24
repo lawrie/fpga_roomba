@@ -61,7 +61,7 @@ oled_pmod = [
             Subsignal("oled_csn", Pins("2", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
-angles = [math.radians(0.4 + (x * 0.8)) for x in range(450)]
+angles = [math.radians(x * 0.8) for x in range(450)]
 sin = [int(math.sin(x) * 128) + 128 for x in angles]
 cos = [int(math.cos(x) * 128) + 128 for x in angles]
 
@@ -177,7 +177,6 @@ class RoombaTest(Elaboratable):
         forward_time = Signal(16, reset=init_forward_time) # Millisecond for forward
         millis = Signal(16) # Millisecond counter
         lidar = Signal(8 * 47) # Lidar data
-        start_angle = Signal(16, reset=0xffff) # Start angle from frame
         distance = Signal(16) # Current distance from frame
         intensity = Signal(8) # Current intensity from frame
         last_byte = Signal(8) # Last lidar byte read
@@ -188,18 +187,18 @@ class RoombaTest(Elaboratable):
         fi = Signal(6) # Frame index of data frames per scan
         ai = Signal(9) # Angle index, 0 to 449
         pi = Signal(2) # Point index for byte within point data
-        x = Signal(signed(24))
-        y = Signal(signed(24))
-        cos_s = Signal(signed(8))
-        sin_s = Signal(signed(8))
-
-        lx = Signal(8)
-        ly = Signal(8)
-
-        m.d.comb += [
-            lx.eq(x[13:21] + 120),
-            ly.eq(120 - y[13:21])
-        ]
+        pp = Signal(4) # Pointer to current point in frame
+        sc = Signal(3) # Scan counter
+        x = Signal(signed(24)) # x-cordinate in signed 16.8 format
+        y = Signal(signed(24)) # y-coordinate in signed 16.8 format
+        cos_s = Signal(signed(8)) # Signed current cosine in 0.8 format
+        sin_s = Signal(signed(8)) # Signed current sine in 0.8 format
+        lx = Signal(8) # LCD screen x-coordinate
+        ly = Signal(8) # LCD screen y-coordinate
+        angle = Signal(16) # Current angle in 100s of a degree
+        start_angle = Signal(16) # Start of frame angle in 1/100s of a degree
+        min_angle = Signal(16, reset=0xFFFF) # Minimum start of frame angle in 1/100s
+        max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
 
         # Set device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -283,8 +282,10 @@ class RoombaTest(Elaboratable):
 
         m.d.comb += [
             lcd_w.addr.eq((ly * 240) + lx),
-            lcd_r.addr.eq((st7789.y * 240) + st7789.x),
-            st7789.color.eq(Mux(lcd_r.data, 0xF800, 0x0000))
+            lcd_r.addr.eq((st7789.x * 240) + st7789.y),
+            st7789.color.eq(Mux(((st7789.y == 127) | (st7789.y == 128)) & 
+                                ((st7789.x == 127) | (st7789.x == 128)), 
+                                  0x001F, Mux(lcd_r.data, 0xF800, 0x0000)))
         ]
 
         # Functions to send commands
@@ -341,15 +342,12 @@ class RoombaTest(Elaboratable):
 
         # Check distance to obstacle
         with m.If(ld19.rx.rdy & (li == 46)): # Read checksum
-            with m.If(lidar[32:48] < 0x0080): # First frame
-                # Set frame index to zero
-                m.d.sync += fi.eq(0)
-                m.d.sync += ai.eq(0)
-                # Stop if obstacle closer than about 25cm
-                with m.If(lidar[48:64] < 0x100):
-                    stop()
-            with m.Else():
-                m.d.sync += fi.eq(fi + 1)
+            # Stop if obstacle closer than about 25cm
+            with m.If((ai == 0) & (distance < 0x100)):
+                stop()
+
+        with m.If(ai == 0):
+            m.d.sync += led16.eq(distance)
 
         # Control state machine
         with m.FSM():
@@ -592,12 +590,34 @@ class RoombaTest(Elaboratable):
         #    int_w.en.eq(0)
         #]
 
-        m.d.sync += lcd_w.en.eq(0)
+        # Clear screen on odd scans
+        m.d.sync += [
+            lcd_w.en.eq((sc == 0)),
+            lcd_w.data.eq(0)
+        ]
+
+        with m.If(sc == 0):
+            m.d.sync += lx.eq(lx + 1)
+            with m.If(lx == 239):
+                m.d.sync += lx.eq(0)
+                with m.If(ly == 239):
+                    m.d.sync += ly.eq(0)
+                with m.Else():
+                    m.d.sync += ly.eq(ly + 1)
+        with m.Else():
+            m.d.sync += [
+                lx.eq(120 - x[12:20]),
+                ly.eq(120 - y[12:20])
+            ]
 
         # Read lidar data
         with m.If(ld19.rx.rdy):
+            # Save last byte
             m.d.sync += last_byte.eq(ld19.rx.data)
+            # Put all the data in long lidar signal
             m.d.sync += lidar.word_select(li, 8).eq(ld19.rx.data)
+
+            # Increment lidar index and sync to header
             with m.If(li == 46):
                 m.d.sync += li.eq(0)
             with m.Elif((ld19.rx.data == 0x2c) & (last_byte == 0x54)):
@@ -607,33 +627,64 @@ class RoombaTest(Elaboratable):
             with m.Else():
                 m.d.sync += li.eq(li + 1)
 
+            # Set index to points
             with m.If(li == 5):
-                m.d.sync += pi.eq(0)
+                m.d.sync += [
+                    pi.eq(0),
+                    pp.eq(0)
+                ]
             with m.Elif((li > 5) & (li < 42)):
+                # Check for frames with start angle closer to zero
+                with m.If(li == 6):
+                    m.d.sync += angle.eq(lidar[32:48])
+                    m.d.sync += start_angle.eq(lidar[32:48])
+                    with m.If(lidar[32:48] < min_angle):
+                        m.d.sync += [
+                            min_angle.eq(lidar[32:48]),
+                            # Reset the angle index to 0
+                            ai.eq(0),
+                            sc.eq(sc + 1)
+                        ]
                 with m.If(pi == 2):
+                    # Intensity 
                     m.d.sync += [
                         pi.eq(0),
+                        pp.eq(pp + 1),
                         intensity.eq(ld19.rx.data),
+                        lcd_w.data.eq((ld19.rx.data > 0) & 
+                                      ((y[20:] == 0) | (y[20:] == 0xF)) & 
+                                      ((x[20:] == 0) | (x[20:] == 0xF)) &
+                                      (sc > 0) & (ai < 450)),
+                        lcd_w.en.eq(1)
                         #int_w.en.eq(1)
                     ]
-                    with m.If(ai == 449):
-                        m.d.sync += ai.eq(0)
-                    with m.Else():
-                        m.d.sync += ai.eq(ai + 1)
 
-                    with m.If(ai == 0):
-                        m.d.sync += led16.eq(y[7:])
-                        #m.d.sync += led16.eq(distance)
+                    #  Check for angle going over 360
+                    with m.If((pp < 11) & ((angle + 80) >= 36000)):
+                        m.d.sync += [
+                            ai.eq(0),
+                            sc.eq(sc + 1),
+                            angle.eq(angle + 80 - 36000)
+                        ]
+                    with m.Else():
+                        m.d.sync += [
+                            ai.eq(ai + 1),
+                            angle.eq(angle + 80)
+                        ]
+                        with m.If(ai == 449):
+                            m.d.sync += [
+                                ai.eq(0),
+                                sc.eq(sc + 1)
+                           ]
                 with m.Else():
                     m.d.sync += pi.eq(pi + 1)
+                    # Distance
                     with m.If(pi == 1):
                         m.d.sync += [
                             distance.eq(Cat(last_byte, ld19.rx.data)),
                             #dist_w.en.eq(1),
                             x.eq(Cat(last_byte, ld19.rx.data) * sin_s),
-                            y.eq(Cat(last_byte, ld19.rx.data) * cos_s),
-                            lcd_w.data.eq(1),
-                            lcd_w.en.eq(1)
+                            y.eq(Cat(last_byte, ld19.rx.data) * cos_s)
                         ]
 
         return m
