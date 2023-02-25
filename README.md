@@ -101,7 +101,7 @@ Although an Arduino Bluetooth Controller can be used to control the robot and th
 
 The main parts of the gateware are:
 
-- Memory to hold pre-caculated sin and cosine tables for 450 ables from 0 to 360 in 0.8 degree increment. This is what the LD19 lidar device send for each rotsation.
+- Memory to hold pre-caculated sin and cosine tables for 450 angles from 0 to 360 in 0.8 degree increment. This is what the LD19 lidar device sends for each rotation.
 - Memory to hold the occupancy grid map, displayed on the LCD
 - Button debouncer HDL modules for button control
 - Use of the aramarhth-stdio uart HDL for each uart
