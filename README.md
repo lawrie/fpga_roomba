@@ -59,7 +59,7 @@ This uses the Python programming language to generate the HDL, which gives it mu
 
 In amaranth there is a "domain" for combinatorial logic, called "comb", and one or more domains for synchronous logic each with its own clock. Simple designs use just one clock and there is a default clock domain called "sync".
 
-Amaranth code is divided into a set of modules. Inputs, outputs and register are all specified as signals with a width in bits and other properties.
+Amaranth code is divided into a set of modules. Inputs, outputs and registers are all specified as signals with a width in bits and other properties.
 
 To generate a combinatorial statement you write:
 
@@ -77,9 +77,9 @@ A rough schematic of the electronics used by the FPGA Roomba robot is:
 
 ![Schematic](https://raw.githubusercontent.com/lawrie/lawrie.github.io/master/images/roomba_schematic.jpg)
 
-The 15v signal from the Roomba goes, through a switch,  to the DC-DC converter which has a USB type A socket, which is used to power the FPGA.
+The 15v signal from the Roomba goes, through a switch, to the DC-DC converter which has a USB type A socket, which is used to power the FPGA.
 
-The DD, TX and RX signals from the Roomba DIN socket do to the level-shifter than converts them to 3.3v logic. They then go to TX, RX and DD FPGA pins.
+The DD, TX and RX signals from the Roomba DIN socket go to the level-shifter that converts them to 3.3v logic. They then go to TX, RX and DD FPGA pins.
 
 The HM-10 Bluetooth module is connected via a handmade Pmod to the FPGA It uses another uart interface. 
 
