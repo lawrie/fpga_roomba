@@ -109,7 +109,7 @@ The main parts of the gateware are:
 - A state machine for waking up the Roomba and defining commands to send to it
 - A memory ROM with pre-defined commands to send to the Roomba
 - A song definition for a song for the Roomba to play using midi notes
-- A state macchine to send the commands to the Roomba
+- A state machine to send the commands to the Roomba via its uart
 - A state machine to read sensor data from the Roomba
 - A state machine to read in and execute single-character Bluetooth commnds, such as forwards, spin left and stop
 - A state machine to read the Lidar data and create the map from it
