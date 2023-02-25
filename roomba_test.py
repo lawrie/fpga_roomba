@@ -119,8 +119,6 @@ class RoombaTest(Elaboratable):
         init_speed = 200
         init_turn_time = int((0.7 + (320 / init_speed)) * 1000)
         init_forward_time = int((1000 / init_speed) * 1000)
-        print("Turn time: ", init_turn_time)
-        print("Forward time: ", init_forward_time)
         wake_time = 2
         wait_time = 1
         dd_time = 0.1
@@ -206,12 +204,6 @@ class RoombaTest(Elaboratable):
         # Song definition
         song_bytes = [67, 16, 67, 16, 67, 16, 64, 64]
 
-        # Set leds to to bump sensors
-        #m.d.comb += [
-        #    breaker.led4.eq(sensor[0]),
-        #    breaker.led5.eq(sensor[1])
-        #]
-
         # Create debouncers for the buttons
         m.submodules.deb1 = deb1 = Debouncer()
         m.submodules.deb2 = deb2 = Debouncer()
@@ -261,34 +253,22 @@ class RoombaTest(Elaboratable):
         m.d.comb += cos_r.addr.eq(ai)
         m.d.comb += cos_s.eq(cos_r.data - 128)
 
-        # Memory for distance measurements
-        #dist_mem = Memory(width=16, depth=450)
-        #m.submodules.dist_r = dist_r = dist_mem.read_port()
-        #m.submodules.dist_w = dist_w = dist_mem.write_port()
-
-        #m.d.comb += dist_w.addr.eq(ai)
-
-        # Memory for intensity measurements
-        #int_mem = Memory(width=8, depth=450)
-        #m.submodules.int_r = int_r = int_mem.read_port()
-        #m.submodules.int_w = int_w = int_mem.write_port()
-
-        #m.d.comb += int_w.addr.eq(ai - 1)
-
         # Memory for LCD buffer
         lcd_mem = Memory(width=1, depth=240 * 240)
         m.submodules.lcd_r = lcd_r = lcd_mem.read_port()
         m.submodules.lcd_w = lcd_w = lcd_mem.write_port()
 
         m.d.comb += [
+            # Set addresses to write to and read from the LCD memory
             lcd_w.addr.eq((ly * 240) + lx),
             lcd_r.addr.eq((st7789.x * 240) + st7789.y),
+            # Draw robot in centre in blue, and draw map in red
             st7789.color.eq(Mux(((st7789.y == 127) | (st7789.y == 128)) & 
                                 ((st7789.x == 127) | (st7789.x == 128)), 
                                   0x001F, Mux(lcd_r.data, 0xF800, 0x0000)))
         ]
 
-        # Functions to send commands
+        # Functions to send commands to Roomba
         def send(c):
             m.d.sync += [
                 cnt.eq(0),
@@ -336,20 +316,22 @@ class RoombaTest(Elaboratable):
             with m.Else():
                 m.d.sync += l.eq(0)
 
+        # Play a previously defined song on Roomba
         def play_song(n):
             send(play)
             m.d.sync += cmd[1].eq(n)
 
-        # Check distance to obstacle
+        # Check distance to obstacle, and stop if too close
         with m.If(ld19.rx.rdy & (li == 46)): # Read checksum
             # Stop if obstacle closer than about 25cm
             with m.If((ai == 0) & (distance < 0x100)):
                 stop()
 
+        # Show forward distance measurement on leds
         with m.If(ai == 0):
             m.d.sync += led16.eq(distance)
 
-        # Control state machine
+        # Roomba control state machine
         with m.FSM():
             with m.State("BEGIN"):
                 m.d.sync += [
@@ -386,6 +368,7 @@ class RoombaTest(Elaboratable):
                 with m.If(cnt == int(clk_freq * wait_time)):
                     m.next = "SONG"
             with m.State("SONG"):
+                # Define a song
                 send(song)
                 m.d.sync += [
                     num_notes.eq(len(song_bytes) // 2),
@@ -396,6 +379,7 @@ class RoombaTest(Elaboratable):
                   m.d.sync += cmd[n+3].eq(song_bytes[n])
                 m.next = "PLAY"
             with m.State("BUTTON"):
+                # Wait for a button to be pressed
                 with m.If(deb1.btn_up):
                     m.next = "MOVE"
                 with m.If(deb2.btn_up):
@@ -406,6 +390,7 @@ class RoombaTest(Elaboratable):
                     m.next = "SONG"
                 with m.If(deb5.btn_up):
                     m.next = "ROM"
+            # The following sequence up to "STOP" is a fixed test set of movements and could be removed
             with m.State("MOVE"):
                 # Send drive command
                 forward()
@@ -453,6 +438,7 @@ class RoombaTest(Elaboratable):
                 ]
                 m.next = "WAIT"   
             with m.State("WAIT"):
+                # Wait for cnt to cycles
                 m.d.sync += cnt.eq(cnt + 1)
                 with m.If(cnt == int(clk_freq * 0.5)):
                     m.d.sync += cnt.eq(0)
@@ -465,9 +451,11 @@ class RoombaTest(Elaboratable):
                     play_song(0)
                     m.next = "WAIT_UART"
             with m.State("WAIT_UART"):
+                # Wait for the uart write to complete
                 with m.If(~sending):
                     m.next = "BUTTON"
             with m.State("LEDS"):
+                # Set the Roomba Leds
                 send(set_leds)
                 m.d.sync += [
                     breaker.led5.eq(1),
@@ -477,6 +465,7 @@ class RoombaTest(Elaboratable):
                 ]
                 m.next = "WAIT_UART"
             with m.State("ROM"):
+                # Execute the ROM
                 with m.If(addr < len(rom)):
                     m.d.sync += [
                         cmd[0].eq(r.data),
@@ -512,6 +501,7 @@ class RoombaTest(Elaboratable):
                 with m.If(~sending):
                     m.next = "ROM"
             with m.State("COUNTDOWN"):
+                # Wait for 'millis' milliseconds
                 m.d.sync += cnt.eq(cnt + 1)
                 with m.If(cnt == int(clk_freq // 1000)):
                     m.d.sync += [
@@ -548,7 +538,7 @@ class RoombaTest(Elaboratable):
                 with m.If(~sending):
                     m.next = "IDLE"
 
-        # Send command state machine
+        # Send Roomba command state machine
         with m.FSM():
             with m.State("IDLE"):
                 with m.If(sending):
@@ -575,7 +565,7 @@ class RoombaTest(Elaboratable):
                             serial.tx.ack.eq(1)
                         ]
 
-        # Read sensor data - 10 byte packets
+        # Read Roomba sensor data - 10 byte packets
         with m.If(serial.rx.rdy):
             m.d.sync += leds[1].eq(1)
             m.d.sync += sensor.word_select(si, 8).eq(serial.rx.data)
@@ -584,18 +574,14 @@ class RoombaTest(Elaboratable):
             with m.Else():
                 m.d.sync += si.eq(si + 1)
 
-        # Don't write data by default
-        #m.d.sync += [
-        #    dist_w.en.eq(0),
-        #    int_w.en.eq(0)
-        #]
-
-        # Clear screen on odd scans
+        # Clear screen periodically. Period set by width of 'sc'
         m.d.sync += [
             lcd_w.en.eq((sc == 0)),
             lcd_w.data.eq(0)
         ]
 
+
+        # Either clear screen or use lx and ly to write to LCD memory
         with m.If(sc == 0):
             m.d.sync += lx.eq(lx + 1)
             with m.If(lx == 239):
@@ -605,6 +591,7 @@ class RoombaTest(Elaboratable):
                 with m.Else():
                     m.d.sync += ly.eq(ly + 1)
         with m.Else():
+            # Set the correct orientation
             m.d.sync += [
                 lx.eq(120 - x[12:20]),
                 ly.eq(120 - y[12:20])
@@ -618,16 +605,23 @@ class RoombaTest(Elaboratable):
             m.d.sync += lidar.word_select(li, 8).eq(ld19.rx.data)
 
             # Increment lidar index and sync to header
-            with m.If(li == 46):
+            # The method of syncing to start of frame is flawed as 0x542c could appear in the data.
+            # Should really check for the gaps between bytes received to determine start of frame
+            with m.If(li == 46): # End of frame
                 m.d.sync += li.eq(0)
             with m.Elif((ld19.rx.data == 0x2c) & (last_byte == 0x54)):
-                m.d.sync += li.eq(2)
-                m.d.sync += lidar[:8].eq(0x54)
-                m.d.sync += breaker.led1.eq(~breaker.led1)
+                # Header is 0x54 followed by 0x2c version
+                m.d.sync += [
+                    li.eq(2),
+                    lidar[:8].eq(0x54)
+                ]
             with m.Else():
                 m.d.sync += li.eq(li + 1)
 
-            # Set index to points
+            # Set index to points that start at byte 6. 
+            # There are 12 points consisting or a 16-bit distance and 8-bit intensity
+            # The data following the points is the 16-bit end angle, a 16-bit temestamp and an 8-bit crc
+            # Those are currently ignored
             with m.If(li == 5):
                 m.d.sync += [
                     pi.eq(0),
@@ -636,8 +630,12 @@ class RoombaTest(Elaboratable):
             with m.Elif((li > 5) & (li < 42)):
                 # Check for frames with start angle closer to zero
                 with m.If(li == 6):
-                    m.d.sync += angle.eq(lidar[32:48])
-                    m.d.sync += start_angle.eq(lidar[32:48])
+                    # Bytes 4 and 6 are the start angle for the frame
+                    # Bytes 2 and 3 are the speed, which is currently ignored
+                    m.d.sync += [
+                        angle.eq(lidar[32:48]),
+                        start_angle.eq(lidar[32:48])
+                    ]
                     with m.If(lidar[32:48] < min_angle):
                         m.d.sync += [
                             min_angle.eq(lidar[32:48]),
@@ -645,21 +643,22 @@ class RoombaTest(Elaboratable):
                             ai.eq(0),
                             sc.eq(sc + 1)
                         ]
-                with m.If(pi == 2):
-                    # Intensity 
+                with m.If(pi == 2): # End of point data
                     m.d.sync += [
+                        # Move on to next point
                         pi.eq(0),
                         pp.eq(pp + 1),
+                        # Set intensity and write to LCD buffer
                         intensity.eq(ld19.rx.data),
                         lcd_w.data.eq((ld19.rx.data > 0) & 
                                       ((y[20:] == 0) | (y[20:] == 0xF)) & 
                                       ((x[20:] == 0) | (x[20:] == 0xF)) &
                                       (sc > 0) & (ai < 450)),
                         lcd_w.en.eq(1)
-                        #int_w.en.eq(1)
                     ]
 
-                    #  Check for angle going over 360
+                    #  Check for angle going over 360 degrees or index reaching 450
+                    #  Angle icrements by 0.8 degrees for each point
                     with m.If((pp < 11) & ((angle + 80) >= 36000)):
                         m.d.sync += [
                             ai.eq(0),
@@ -678,17 +677,17 @@ class RoombaTest(Elaboratable):
                            ]
                 with m.Else():
                     m.d.sync += pi.eq(pi + 1)
-                    # Distance
+                    # Set distance and calculate x and y co-ordinates using sin and cosine tables
                     with m.If(pi == 1):
                         m.d.sync += [
                             distance.eq(Cat(last_byte, ld19.rx.data)),
-                            #dist_w.en.eq(1),
                             x.eq(Cat(last_byte, ld19.rx.data) * sin_s),
                             y.eq(Cat(last_byte, ld19.rx.data) * cos_s)
                         ]
 
         return m
 
+# Generate and upload bitstream
 if __name__ == "__main__":
     platform = BlackIceMXPlatform()
     platform.add_resources(roomba_pmod)
