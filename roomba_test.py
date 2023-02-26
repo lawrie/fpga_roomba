@@ -11,7 +11,7 @@ from st7789 import ST7789
 
 import math
 
-# Connect the Roomba Device Detect pin
+# Connect the Roomba Device Detect pin, and the Lidar TX pin to unused Pmod slot
 roomba_pmod= [
     Resource("roomba", 0,
             Subsignal("dd",      Pins("10", dir="o", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")),
@@ -31,7 +31,7 @@ breaker_pmod= [
             Subsignal("btn3",      Pins("10", dir="i", conn=("pmod",0)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
-# Digilent 8LED Pmod
+# Digilent 8LED Pmods x 2
 pmod_led8_1 = [
     Resource("led8_1", 0,
         Subsignal("leds", Pins("1 2 3 4 7 8 9 10", dir="o", conn=("pmod",2))),
@@ -44,7 +44,6 @@ pmod_led8_2 = [
         Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
 
-
 # Pmod for HM-10 BLE device
 pmod_bt = [
     Resource("bt", 0,
@@ -52,6 +51,7 @@ pmod_bt = [
         Attrs(IO_STANDARD="SB_LVCMOS"))
 ]
 
+# Pmod for ST7789 LCD
 oled_pmod = [
     Resource("oled", 0,
             Subsignal("oled_clk", Pins("7", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")),
@@ -61,6 +61,7 @@ oled_pmod = [
             Subsignal("oled_csn", Pins("2", dir="o", conn=("pmod",5)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
+# Generate sine and cosine tables for angles frrom 0 to 360 degrees in 0.8 degree steps
 angles = [math.radians(x * 0.8) for x in range(450)]
 sin = [int(math.sin(x) * 128) + 128 for x in angles]
 cos = [int(math.cos(x) * 128) + 128 for x in angles]
@@ -123,8 +124,10 @@ class RoombaTest(Elaboratable):
         wait_time = 1
         dd_time = 0.1
 
+        # Start of elaboratin
         m = Module()
 
+        # Create ST7789 LCD module and connect pins
         st7789 = ST7789(reset_delay=100000,reset_period=100000)
         m.submodules.st7789 = st7789
 
@@ -198,7 +201,7 @@ class RoombaTest(Elaboratable):
         min_angle = Signal(16, reset=0xFFFF) # Minimum start of frame angle in 1/100s
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
 
-        # Set device detect pin
+        # Connect Roomba device detect pin
         m.d.comb += roomba.dd.eq(dd)
 
         # Song definition
@@ -221,17 +224,18 @@ class RoombaTest(Elaboratable):
         ]
 
         # Create a ROM to do some commands
-        rom = [drive, 0, 200, 0x80, 0, 
-               0, 0, 20,
-               drive, 0, 200, 0, 1, 
-               0, 0, 9, 
-               drive, 0, 200, 0x80, 0,
-               0, 0, 20,
-               drive, 0, 200, 0, 1,
-               0, 0, 9,
-               drive, 0, 0, 0x80, 0
+        rom = [drive, 0, 200, 0x80, 0,  # Drive forward 
+               0, 0, 20,                # Wait 20 x 256 (5k) miilseconds
+               drive, 0, 200, 0, 1,     # Spin left
+               0, 0, 9,                 # Wait 9 x 256 (about 2300) milliseconds
+               drive, 0, 200, 0x80, 0,  # Drive forward
+               0, 0, 20,                # Wait about 5 seconds
+               drive, 0, 200, 0, 1,     # Spin left
+               0, 0, 9,                 # Wait 2.3 seconds
+               drive, 0, 0, 0x80, 0     # Stop (drive at zero speed)
               ]
 
+        # Memory for ROM
         mem = Memory(width=8, depth=len(rom), init=rom)
         m.submodules.r = r = mem.read_port()
 
@@ -243,6 +247,7 @@ class RoombaTest(Elaboratable):
         sin_mem = Memory(width=8, depth=450, init=sin)
         m.submodules.sin_r = sin_r = sin_mem.read_port()
 
+        # Set sin_s to the signed value
         m.d.comb += sin_r.addr.eq(ai)
         m.d.comb += sin_s.eq(sin_r.data - 128)
 
@@ -250,6 +255,7 @@ class RoombaTest(Elaboratable):
         cos_mem = Memory(width=8, depth=450, init=cos)
         m.submodules.cos_r = cos_r = cos_mem.read_port()
 
+        # Set cos_s to the signed value
         m.d.comb += cos_r.addr.eq(ai)
         m.d.comb += cos_s.eq(cos_r.data - 128)
 
@@ -328,8 +334,9 @@ class RoombaTest(Elaboratable):
                 stop()
 
         # Show forward distance measurement on leds
-        with m.If(ai == 0):
-            m.d.sync += led16.eq(distance)
+        with m.If((ai == 0) & (li == 46)):
+            #m.d.sync += led16.eq(distance)
+            m.d.sync += led16.eq(intensity)
 
         # Roomba control state machine
         with m.FSM():
@@ -579,7 +586,6 @@ class RoombaTest(Elaboratable):
             lcd_w.en.eq((sc == 0)),
             lcd_w.data.eq(0)
         ]
-
 
         # Either clear screen or use lx and ly to write to LCD memory
         with m.If(sc == 0):
