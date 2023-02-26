@@ -388,7 +388,7 @@ class RoombaTest(Elaboratable):
             with m.State("BUTTON"):
                 # Wait for a button to be pressed
                 with m.If(deb1.btn_up):
-                    m.next = "MOVE"
+                    m.next = "BEGIN"
                 with m.If(deb2.btn_up):
                     m.next = "SLEEP"
                 with m.If(deb3.btn_up):
