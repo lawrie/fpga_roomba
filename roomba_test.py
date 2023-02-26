@@ -604,6 +604,20 @@ class RoombaTest(Elaboratable):
             ]
 
         # Read lidar data
+        #
+        # Lidar data consists of frames of 47 bytes, containing:
+        #
+        # byte type   index data         description
+        #    0   u8     0:8 header       0x54
+        #    1   u8    8:16 ver_len      0x2c
+        #  2-3  u16   16:32 speed        millimeters per second
+        #  4-5  u16   32:48 start_angle  hundredth of degrees
+        # 6-41                           12 points
+        #       u16         distance     millimeters
+        #        u8         intensity    0 - 255
+        #   42  u16 336:352 end_angle    hundredth of degress
+        #   44  u16 352:368 timestamp
+        #   46   u8 368:376 checksum
         with m.If(ld19.rx.rdy):
             # Save last byte
             m.d.sync += last_byte.eq(ld19.rx.data)
@@ -633,7 +647,7 @@ class RoombaTest(Elaboratable):
                     pi.eq(0),
                     pp.eq(0)
                 ]
-            with m.Elif((li > 5) & (li < 42)):
+            with m.Elif((li >= 6) & (li < 42)):
                 # Check for frames with start angle closer to zero
                 with m.If(li == 6):
                     # Bytes 4 and 6 are the start angle for the frame
