@@ -125,6 +125,7 @@ class RoombaTest(Elaboratable):
         wake_time = 2
         wait_time = 1
         dd_time = 0.1
+        sensor_cycles = 250000
 
         # Start of elaboratin
         m = Module()
@@ -212,6 +213,8 @@ class RoombaTest(Elaboratable):
         start_angle = Signal(16) # Start of frame angle in 1/100s of a degree
         min_angle = Signal(16, reset=0xFFFF) # Minimum start of frame angle in 1/100s
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
+        s_cnt = Signal(18) # Counter for delay between roomba sensor reads
+        sensor_read = Signal(1) # Set when sensor reads are required
 
         # Connect Roomba device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -314,12 +317,15 @@ class RoombaTest(Elaboratable):
 
         def forward():
             do_drive(speed, C(0x8000, 16))
+            m.d.sync += sensor_read.eq(1)
 
         def backward():
             do_drive(-speed, C(0x8000, 16))
+            m.d.sync += sensor_read.eq(1)
 
         def stop():
             do_drive(C(0,16), C(0x8000, 16))
+            m.d.sync += sensor_read.eq(0)
 
         def spin_left():
             do_drive(speed, C(0x0001, 16))
@@ -353,11 +359,28 @@ class RoombaTest(Elaboratable):
             # Stop if obstacle closer than about 25cm
             with m.If((ai == 0) & (distance < 0x100)):
                 stop()
+            with m.If(sensor[:8] != 0):
+                play_song(0)
 
         # Show forward distance measurement on leds
         with m.If((ai == 0) & (li == 46)):
             m.d.sync += led16.eq(distance)
             #m.d.sync += led16.eq(intensity)
+
+        # Read sensors, if requested
+        with m.If(sensor_read):
+            with m.If(s_cnt == sensor_cycles):
+                m.d.sync += s_cnt.eq(0)
+                with m.If(~sending):
+                    send(read_sensors)
+                    m.d.sync += [
+                        cmd[1].eq(1), # 10 bytes
+                        leds[0].eq(1)
+                    ]
+            with m.Else():
+                m.d.sync += s_cnt.eq(s_cnt + 1)
+        with m.Else():
+            m.d.sync += s_cnt.eq(0)
 
         # Roomba control state machine
         with m.FSM():
@@ -510,6 +533,11 @@ class RoombaTest(Elaboratable):
                 with m.If(ri == l):
                     with m.If(cmd[0][7]):
                         m.d.sync += sending.eq(1)
+                        with m.If(cmd[0] == drive):
+                            with m.If((cmd[1] == 0) & (cmd[2] == 0)):
+                                m.d.sync += sensor_read.eq(0)
+                            with m.Else():
+                                m.d.sync += sensor_read.eq(1)
                         m.next = "EXEC"
                     with m.Else():
                         m.d.sync += [
