@@ -14,8 +14,10 @@ import math
 # Connect the Roomba Device Detect pin, and the Lidar TX pin to unused Pmod slot
 roomba_pmod= [
     Resource("roomba", 0,
-            Subsignal("dd",      Pins("10", dir="o", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")),
-            Subsignal("rx",      Pins("9", dir="i", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")))
+            Subsignal("dd",         Pins("10", dir="o", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("lidar_rx",   Pins("9", dir="i", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("roomba_rx",  Pins("8", dir="i", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")),
+            Subsignal("roomba_tx",  Pins("7", dir="o", conn=("pmod",4)), Attrs(IO_STANDARD="SB_LVCMOS")))
 ]
 
 # iCEBreaker Pmod used for extra buttons and Leds
@@ -139,12 +141,22 @@ class RoombaTest(Elaboratable):
             oled_csn .eq(st7789.spi_csn)
         ]
 
-        # Create the uart
-        m.submodules.serial = serial = AsyncSerial(divisor=divisor, pins=uart)
+        # Create the roomba uart
+        m.submodules.serial = serial = AsyncSerial(divisor=divisor)
+
+        # Connect the RX pin
+        m.submodules += FFSynchronizer(roomba.roomba_rx, serial.rx.i, reset=1)
+        m.submodules += FFSynchronizer(serial.tx.o, roomba.roomba_tx, reset=1)
 
         # Always allow reads
         m.d.comb += serial.rx.ack.eq(1)
+        
+        # Create a uart to the host with same baud as roomba
+        m.submodules.host = host = AsyncSerial(divisor=divisor, pins=uart)
 
+        # Always allow reads
+        m.d.comb += host.rx.ack.eq(1)
+        
         # Create the bluetooth uart
         bt_divisor = int(clk_freq // 9600)
         m.submodules.bt = bt = AsyncSerial(divisor=bt_divisor)
@@ -163,7 +175,7 @@ class RoombaTest(Elaboratable):
         m.d.comb += ld19.rx.ack.eq(1)
 
         # Connect the RX pin
-        m.submodules += FFSynchronizer(roomba.rx, ld19.rx.i, reset=1)
+        m.submodules += FFSynchronizer(roomba.lidar_rx, ld19.rx.i, reset=1)
 
         # Signals
         dd = Signal(reset=1) # Device detect
@@ -274,6 +286,15 @@ class RoombaTest(Elaboratable):
                                   0x001F, Mux(lcd_r.data, 0xF800, 0x0000)))
         ]
 
+        # Connect leds to bumper and wheel drop sensors
+        m.d.comb += [
+            breaker.led1.eq(sensor[0]),
+            breaker.led2.eq(sensor[1]),
+            breaker.led3.eq(sensor[2]),
+            breaker.led4.eq(sensor[3]),
+            breaker.led5.eq(sensor[4])
+        ]
+
         # Functions to send commands to Roomba
         def send(c):
             m.d.sync += [
@@ -335,8 +356,8 @@ class RoombaTest(Elaboratable):
 
         # Show forward distance measurement on leds
         with m.If((ai == 0) & (li == 46)):
-            #m.d.sync += led16.eq(distance)
-            m.d.sync += led16.eq(intensity)
+            m.d.sync += led16.eq(distance)
+            #m.d.sync += led16.eq(intensity)
 
         # Roomba control state machine
         with m.FSM():
@@ -465,7 +486,6 @@ class RoombaTest(Elaboratable):
                 # Set the Roomba Leds
                 send(set_leds)
                 m.d.sync += [
-                    breaker.led5.eq(1),
                     cmd[1].eq(1), # ledbits, dirt detected
                     cmd[2].eq(0), # power color, green
                     cmd[3].eq(128) # power intensity
