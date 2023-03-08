@@ -216,6 +216,8 @@ class RoombaTest(Elaboratable):
         s_cnt = Signal(18) # Counter for delay between roomba sensor reads
         sensor_read = Signal(1) # Set when sensor reads are required
 
+        obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
+
         # Connect Roomba device detect pin
         m.d.comb += roomba.dd.eq(dd)
 
@@ -295,7 +297,8 @@ class RoombaTest(Elaboratable):
             breaker.led2.eq(sensor[1]),
             breaker.led3.eq(sensor[2]),
             breaker.led4.eq(sensor[3]),
-            breaker.led5.eq(sensor[4])
+            breaker.led5.eq(sensor[4]),
+            leds[1].eq(sensor_read)
         ]
 
         # Functions to send commands to Roomba
@@ -355,12 +358,12 @@ class RoombaTest(Elaboratable):
             m.d.sync += cmd[1].eq(n)
 
         # Check distance to obstacle, and stop if too close
-        with m.If(ld19.rx.rdy & (li == 46)): # Read checksum
-            # Stop if obstacle closer than about 25cm
-            with m.If((ai == 0) & (distance < 0x100)):
-                stop()
-            with m.If(sensor[:8] != 0):
-                play_song(0)
+        #with m.If(ld19.rx.rdy & (li == 46)): # Read checksum
+        #    # Stop if obstacle closer than about 25cm
+        #    with m.If((ai == 0) & (distance < 0x100)):
+        #        stop()
+        #    with m.If(sensor[:8] != 0):
+        #        play_song(0)
 
         # Show forward distance measurement on leds
         with m.If((ai == 0) & (li == 46)):
@@ -375,7 +378,7 @@ class RoombaTest(Elaboratable):
                     send(read_sensors)
                     m.d.sync += [
                         cmd[1].eq(1), # 10 bytes
-                        leds[0].eq(1)
+                        #leds[0].eq(1)
                     ]
             with m.Else():
                 m.d.sync += s_cnt.eq(s_cnt + 1)
@@ -408,7 +411,7 @@ class RoombaTest(Elaboratable):
                 with m.If(~sending):
                     # Send control command
                     send(control)
-                    m.next = "FULL"
+                    m.next = "CONTROL"
             with m.State("CONTROL"):
                 with m.If(~sending):
                     # Send full command
@@ -436,11 +439,33 @@ class RoombaTest(Elaboratable):
                 with m.If(deb2.btn_up):
                     m.next = "SLEEP"
                 with m.If(deb3.btn_up):
-                    m.next = "SENSORS"
+                    m.next = "ROAM"
                 with m.If(deb4.btn_up):
                     m.next = "SONG"
                 with m.If(deb5.btn_up):
                     m.next = "ROM"
+            # Roam around avoiding obstacles
+            with m.State("ROAM"):
+                forward()
+                m.next = "ROAMING"
+            with m.State("ROAMING"):
+                with m.If(ld19.rx.rdy & (li == 46) & (ai == 0) & obstacle):
+                    play_song(0)
+                    m.next = "SPIN"
+                with m.If(deb2.btn_up):
+                    m.d.sync += sensor_read.eq(0)
+                    send(sleep)
+                    m.next = "WAIT_UART"
+            with m.State("SPIN"):
+                with m.If(~sending):
+                    spin_left()
+                    m.d.sync += sensor_read.eq(0)
+                    m.next = "SPINNING"
+            with m.State("SPINNING"):
+                m.d.sync += cnt.eq(cnt + 1)
+                with m.If(cnt == 50000000):
+                    m.d.sync += cnt.eq(0)
+                    m.next = "ROAM"
             # The following sequence up to "STOP" is a fixed test set of movements and could be removed
             with m.State("MOVE"):
                 # Send drive command
@@ -485,7 +510,7 @@ class RoombaTest(Elaboratable):
                 send(read_sensors)
                 m.d.sync += [
                     cmd[1].eq(1), # read 10 bytes
-                    leds[0].eq(1)
+                    #leds[0].eq(1)
                 ]
                 m.next = "WAIT"   
             with m.State("WAIT"):
@@ -622,7 +647,6 @@ class RoombaTest(Elaboratable):
 
         # Read Roomba sensor data - 10 byte packets
         with m.If(serial.rx.rdy):
-            m.d.sync += leds[1].eq(1)
             m.d.sync += sensor.word_select(si, 8).eq(serial.rx.data)
             with m.If(si == 9):
                 m.d.sync += si.eq(0)
