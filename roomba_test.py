@@ -3,6 +3,7 @@ from amaranth_stdio.serial import *
 from amaranth.build import *
 
 from amaranth.lib.cdc import FFSynchronizer
+from amaranth.lib.fifo import SyncFIFOBuffered
 
 from blackice_mx import *
 
@@ -152,12 +153,16 @@ class RoombaTest(Elaboratable):
         # Always allow reads
         m.d.comb += serial.rx.ack.eq(1)
         
-        # Create a uart to the host with same baud as roomba
-        m.submodules.host = host = AsyncSerial(divisor=divisor, pins=uart)
+        # Create a uart to the host
+        host_divisor = int(clk_freq // 230400)
+        m.submodules.host = host = AsyncSerial(divisor=host_divisor, pins=uart)
 
         # Always allow reads
         m.d.comb += host.rx.ack.eq(1)
-        
+
+        # Fifo
+        #m.submodules.fifo = fifo = SyncFIFOBuffered(width = 8, depth = 64)
+
         # Create the bluetooth uart
         bt_divisor = int(clk_freq // 9600)
         m.submodules.bt = bt = AsyncSerial(divisor=bt_divisor)
@@ -198,7 +203,7 @@ class RoombaTest(Elaboratable):
         ri = Signal.like(l) # Rom command index
         si = Signal(4) # Index for sensor data
         li = Signal(6) # Lidar index of byte within frame
-        fi = Signal(6) # Frame index of data frames per scan
+        fc = Signal(6) # Count of lidar frames
         ai = Signal(9) # Angle index, 0 to 449
         pi = Signal(2) # Point index for byte within point data
         pp = Signal(4) # Pointer to current point in frame
@@ -218,9 +223,32 @@ class RoombaTest(Elaboratable):
 
         obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
 
+        # Choose features
+        use_lcd = 1
+        write_host = 1
+
         # Connect Roomba device detect pin
         m.d.comb += roomba.dd.eq(dd)
 
+        # Connect fifo to lidar data
+        #m.d.comb += [
+        #    fifo.w_en.eq(ld19.rx.rdy),
+        #    fifo.w_data.eq(ld19.rx.data)
+        #]
+
+        # Copy bytes from fifo to host
+        #m.d.sync += [
+        #    host.tx.ack.eq(write_host & fifo.r_rdy),
+        #    host.tx.data.eq(fifo.r_data),
+        #    fifo.r_en.eq(host.tx.rdy)
+        #]
+        
+        # Copy bytes from lidar to host
+        m.d.sync += [
+            host.tx.ack.eq(write_host & ld19.rx.rdy),
+            host.tx.data.eq(ld19.rx.data)
+        ]
+        
         # Song definition
         song_bytes = [67, 16, 67, 16, 67, 16, 64, 64]
 
@@ -288,7 +316,7 @@ class RoombaTest(Elaboratable):
             # Draw robot in centre in blue, and draw map in red
             st7789.color.eq(Mux(((st7789.y == 127) | (st7789.y == 128)) & 
                                 ((st7789.x == 127) | (st7789.x == 128)), 
-                                  0x001F, Mux(lcd_r.data, 0xF800, 0x0000)))
+                                  0x001F, Mux(use_lcd & lcd_r.data, 0xF800, 0x0000)))
         ]
 
         # Connect leds to bumper and wheel drop sensors
@@ -700,7 +728,10 @@ class RoombaTest(Elaboratable):
             # The method of syncing to start of frame is flawed as 0x542c could appear in the data.
             # Should really check for the gaps between bytes received to determine start of frame
             with m.If(li == 46): # End of frame
-                m.d.sync += li.eq(0)
+                m.d.sync += [
+                    li.eq(0),
+                    fc.eq(fc + 1)
+                ]
             with m.Elif((ld19.rx.data == 0x2c) & (last_byte == 0x54)):
                 # Header is 0x54 followed by 0x2c version
                 m.d.sync += [
