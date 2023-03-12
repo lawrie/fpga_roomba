@@ -28,19 +28,20 @@ crc_table = [
 ]
 
 pygame.init()
-size = (240, 240)
+width = 480
+size = (width, width)
 screen = pygame.display.set_mode(size)
 pygame.display.set_caption("Lidar mapping")
 clock = pygame.time.Clock()
 done = False
 WHITE = (255, 255, 255)
-BLUE = (0, 0, 255)
+BOT_COLOR = (0, 255, 255)
 
 def draw_robot():
-    screen.set_at((119,119), BLUE)
-    screen.set_at((119,120), BLUE)
-    screen.set_at((120,119), BLUE)
-    screen.set_at((120,120), BLUE)
+    screen.set_at((width // 2 - 1, width // 2 - 1), BOT_COLOR)
+    screen.set_at((width // 2, width // 2), BOT_COLOR)
+    screen.set_at((width // 2, width // 2 - 1), BOT_COLOR)
+    screen.set_at((width // 2, width // 2), BOT_COLOR)
 
 def clear_screen():
     screen.fill((0,0,0))
@@ -60,7 +61,6 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
                     break
 
         frame = 0
-        draw_robot()
 
         while not done:
             b = serial.read(47)
@@ -81,15 +81,15 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
                 if (i != 0):
                     angle = angle + 80
                 rad = math.radians(angle / 100)
-                y = 120 - int(distance * math.sin(rad) / 32)
-                x = 120 - int(distance * math.cos(rad) / 32)
+                y = width // 2 - int(distance * math.sin(rad) / 16)
+                x = width // 2 - int(distance * math.cos(rad) / 16)
                 print("Radians:", rad, end = ", ")
                 print("x:", x,  end=", ")
                 print("y:", y)
                 print("Angle:", angle, end=", ")
                 print("Distance:", distance, end=", ")
                 print("Intensity:", intensity)
-                screen.set_at((240 - y, x), (intensity, 0, 0))
+                screen.set_at((width - y, x), (intensity, intensity, intensity))
             print("end angle:", b[43] * 256 + b[42], end=", ")
             print("timestamp:", b[45] * 256 + b[44], end=", ")
             print("checksum:", b[46])
