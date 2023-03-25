@@ -1,6 +1,10 @@
 import serial
 import pygame
 import math
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from OccupancyGrid import OccupancyGrid
 
 crc_table = [
     0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3, 0xae, 0xf2, 0xbf, 0x68, 0x25,
@@ -27,6 +31,7 @@ crc_table = [
     0x7f, 0x32, 0xe5, 0xa8
 ]
 
+debug = False
 pygame.init()
 width = 480
 size = (width, width)
@@ -37,6 +42,13 @@ done = False
 WHITE = (255, 255, 255)
 BOT_COLOR = (0, 255, 255)
 
+initMapXLength, initMapYLength, unitGridSize, lidarFOV, lidarMaxRange = 4 , 4, 0.032,  2 * np.pi, 12 # in Meters
+wallThickness = 2 * unitGridSize
+numSamplesPerRev = 450
+initXY = {"x": 0.0, "y": 0.0, "theta": (9 * np.pi) / 8}
+og = OccupancyGrid(initMapXLength, initMapYLength, initXY, unitGridSize, lidarFOV, numSamplesPerRev, lidarMaxRange, wallThickness)
+
+
 def draw_robot():
     screen.set_at((width // 2 - 1, width // 2 - 1), BOT_COLOR)
     screen.set_at((width // 2, width // 2), BOT_COLOR)
@@ -46,7 +58,7 @@ def draw_robot():
 def clear_screen():
     screen.fill((0,0,0))
     draw_robot()
-
+    
 clear_screen()
 
 with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
@@ -54,6 +66,8 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
         # Sync with header
         while True:
             b = serial.read(2)
+            if not b:
+                continue
             if b[0] == 0x54 and b[1] == 0x2c:
                 serial.read(45)
                 b = serial.read(47)
@@ -61,6 +75,11 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
                     break
 
         frame = 0
+        idx = 0
+        start_of_scan = False
+        ranges = []
+        num_scans = 0
+        min_angle = 36000
 
         while not done:
             b = serial.read(47)
@@ -70,35 +89,63 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
                 frame = 0
                 clear_screen()
 
-            #print("".join("{0:02x}".format(x) for x in b))
-            print("speed:", b[3] * 256 + b[2], end=", ")
             start_angle = b[5] * 256 + b[4]
-            print("start angle:", start_angle)
+            if debug:
+                #print("".join("{0:02x}".format(x) for x in b))
+                print("Scan number:", num_scans, end=", ")
+                print("Start of scan:", start_of_scan)
+                print("speed:", b[3] * 256 + b[2], end=", ")
+                print("start angle:", start_angle)
             angle = start_angle
+            if angle < min_angle:
+                min_angle = angle
+                print("Reset min angle:", min_angle)
+                idx = 0
+                start_of_scan = True
+                ranges = []
             for i in range(12):
                 distance = b[1*3 + 7] * 256 + b[i*3 + 6]
                 intensity = b[i*3 + 8]
                 if (i != 0):
                     angle = angle + 80
+                    if idx < 449:
+                        idx += 1
+                        start_of_scan = False
+                    else:
+                        idx = 0
+                        start_of_scan = True
+                        num_scans += 1
+                        ranges = []
                 rad = math.radians(angle / 100)
                 y = width // 2 - int(distance * math.sin(rad) / 16)
                 x = width // 2 - int(distance * math.cos(rad) / 16)
-                print("Radians:", rad, end = ", ")
-                print("x:", x,  end=", ")
-                print("y:", y)
-                print("Angle:", angle, end=", ")
-                print("Distance:", distance, end=", ")
-                print("Intensity:", intensity)
+                if debug:
+                    print("Scan number:", num_scans, end=", ")
+                    print("Start of scan:", start_of_scan)
+                    print("Angle idx:", idx)
+                    print("Radians:", rad, end = ", ")
+                    print("x:", x,  end=", ")
+                    print("y:", y)
+                    print("Angle:", angle, end=", ")
+                    print("Distance:", distance, end=", ")
+                    print("Intensity:", intensity)
                 screen.set_at((width - y, x), (intensity, intensity, intensity))
-            print("end angle:", b[43] * 256 + b[42], end=", ")
-            print("timestamp:", b[45] * 256 + b[44], end=", ")
-            print("checksum:", b[46])
+                ranges.append(distance / 1000)
+                if num_scans > 1 and len(ranges) == 450:
+                    ranges.reverse()
+                    og.updateOccupancyGrid({"x":0.0, "y": 0.0, "theta": (19 * np.pi) / 16, "range":ranges})
+                    og.plotOccupancyGrid()
+
+            if debug:
+                print("end angle:", b[43] * 256 + b[42], end=", ")
+                print("timestamp:", b[45] * 256 + b[44], end=", ")
+                print("checksum:", b[46])
             crc = 0
             for i in range(46):
                 crc = crc_table[(crc ^ b[i]) & 0xff]
                 
             if crc != b[46]:
-                print("ERROR")
+                print("CRC Error")
                 break
 
             for event in pygame.event.get():
