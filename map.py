@@ -1,10 +1,12 @@
 import serial
+import time
 import pygame
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from OccupancyGrid import OccupancyGrid
+from ScanMatcher_OGBased import ScanMatcher
 
 crc_table = [
     0x00, 0x4d, 0x9a, 0xd7, 0x79, 0x34, 0xe3, 0xae, 0xf2, 0xbf, 0x68, 0x25,
@@ -47,7 +49,9 @@ wallThickness = 2 * unitGridSize
 numSamplesPerRev = 450
 initXY = {"x": 0.0, "y": 0.0, "theta": (9 * np.pi) / 8}
 og = OccupancyGrid(initMapXLength, initMapYLength, initXY, unitGridSize, lidarFOV, numSamplesPerRev, lidarMaxRange, wallThickness)
-
+scanMatchSearchRadius, scanMatchSearchHalfRad, scanSigmaInNumGrid, wallThickness, moveRSigma, maxMoveDeviation, turnSigma, \
+    missMatchProbAtCoarse, coarseFactor = 1.4, 0.25, 2, 5 * unitGridSize, 0.1, 0.25, 0.3, 0.15, 5
+sm = ScanMatcher(og, scanMatchSearchRadius, scanMatchSearchHalfRad, scanSigmaInNumGrid, moveRSigma, maxMoveDeviation, turnSigma, missMatchProbAtCoarse, coarseFactor)
 
 def draw_robot():
     screen.set_at((width // 2 - 1, width // 2 - 1), BOT_COLOR)
@@ -145,7 +149,7 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
                 crc = crc_table[(crc ^ b[i]) & 0xff]
                 
             if crc != b[46]:
-                print("CRC Error")
+                print("CRC Error at", time.time())
                 break
 
             for event in pygame.event.get():
