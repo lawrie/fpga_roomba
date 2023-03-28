@@ -219,8 +219,9 @@ class RoombaTest(Elaboratable):
         min_angle = Signal(16, reset=0xFFFF) # Minimum start of frame angle in 1/100s
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
         s_cnt = Signal(18) # Counter for delay between roomba sensor reads
-        sensor_read = Signal(1) # Set when sensor reads are required
+        sensor_read = Signal(1) # Set when continuous sensor reads are required
         send_sensor_data = Signal(reset=0)
+        send_roomba_data = Signal(reset=0)
 
         obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
 
@@ -252,7 +253,7 @@ class RoombaTest(Elaboratable):
 
         # Copy bytes from roomba to host
         m.d.sync += [
-            host.tx.ack.eq(sensor_read & serial.rx.rdy),
+            host.tx.ack.eq(send_roomba_data & serial.rx.rdy),
             host.tx.data.eq(serial.rx.data)
         ]
 
@@ -276,16 +277,21 @@ class RoombaTest(Elaboratable):
         ]
 
         # Create a ROM to do some commands
-        rom = [drive, 0, 200, 0x80, 0,  # Drive forward 
-               0, 0, 20,                # Wait 20 x 256 (5k) miilseconds
-               drive, 0, 200, 0, 1,     # Spin left
-               0, 0, 9,                 # Wait 9 x 256 (about 2300) milliseconds
-               drive, 0, 200, 0x80, 0,  # Drive forward
-               0, 0, 20,                # Wait about 5 seconds
-               drive, 0, 200, 0, 1,     # Spin left
-               0, 0, 9,                 # Wait 2.3 seconds
-               drive, 0, 0, 0x80, 0     # Stop (drive at zero speed)
-              ]
+        #rom = [drive, 0, 200, 0x80, 0,  # Drive forward 
+        #       0, 0, 20,                # Wait 20 x 256 (5k) miilseconds
+        #       drive, 0, 200, 0, 1,     # Spin left
+        #       0, 0, 9,                 # Wait 9 x 256 (about 2300) milliseconds
+        #       drive, 0, 200, 0x80, 0,  # Drive forward
+        #       0, 0, 20,                # Wait about 5 seconds
+        #       drive, 0, 200, 0, 1,     # Spin left
+        #       0, 0, 9,                 # Wait 2.3 seconds
+        #       drive, 0, 0, 0x80, 0     # Stop (drive at zero speed)
+        #      ]
+
+        rom = [drive, 0, 200, 0, 1,
+               0, 0, 4,
+               drive, 0, 0, 0x80, 0
+        ]
 
         # Memory for ROM
         mem = Memory(width=8, depth=len(rom), init=rom)
@@ -544,10 +550,10 @@ class RoombaTest(Elaboratable):
                 send(read_sensors)
                 m.d.sync += [
                     cmd[1].eq(0), # read 26 bytes,
-                    sensor_read.eq(1),
-                    send_sensor_data.eq(0)
+                    send_sensor_data.eq(0),
+                    send_roomba_data.eq(1)
                 ]
-                m.next = "WAIT"   
+                m.next = "WAIT_UART"   
             with m.State("WAIT"):
                 # Wait for cnt to cycles
                 m.d.sync += cnt.eq(cnt + 1)
@@ -597,7 +603,7 @@ class RoombaTest(Elaboratable):
                             with m.If((cmd[1] == 0) & (cmd[2] == 0)):
                                 m.d.sync += sensor_read.eq(0)
                             with m.Else():
-                                m.d.sync += sensor_read.eq(1)
+                                m.d.sync += sensor_read.eq(0)
                         m.next = "EXEC"
                     with m.Else():
                         m.d.sync += [
