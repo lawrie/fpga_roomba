@@ -190,7 +190,7 @@ class RoombaTest(Elaboratable):
         l = Signal(6) # Command length
         num_notes = Signal(5) # Number of notes in song
         sending = Signal(reset=0) # Set when sending bytes to Roomba
-        sensor = Signal(80) # Sensor data
+        sensor = Signal(26 * 8) # Sensor data
         speed = Signal(16, reset=init_speed) # Forward and turn speed
         turn_time = Signal(16, reset=init_turn_time) # Roomba speed in mm/s
         forward_time = Signal(16, reset=init_forward_time) # Millisecond for forward
@@ -220,12 +220,12 @@ class RoombaTest(Elaboratable):
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
         s_cnt = Signal(18) # Counter for delay between roomba sensor reads
         sensor_read = Signal(1) # Set when sensor reads are required
+        send_sensor_data = Signal(reset=0)
 
         obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
 
         # Choose features
         use_lcd = 1
-        write_host = 1
 
         # Connect Roomba device detect pin
         m.d.comb += roomba.dd.eq(dd)
@@ -238,17 +238,24 @@ class RoombaTest(Elaboratable):
 
         # Copy bytes from fifo to host
         #m.d.sync += [
-        #    host.tx.ack.eq(write_host & fifo.r_rdy),
+        #    host.tx.ack.eq(send_sensor_data & fifo.r_rdy),
         #    host.tx.data.eq(fifo.r_data),
         #    fifo.r_en.eq(host.tx.rdy)
         #]
         
         # Copy bytes from lidar to host
         m.d.sync += [
-            host.tx.ack.eq(write_host & ld19.rx.rdy),
+            host.tx.ack.eq(send_sensor_data & ld19.rx.rdy),
             host.tx.data.eq(ld19.rx.data)
         ]
-        
+
+
+        # Copy bytes from roomba to host
+        m.d.sync += [
+            host.tx.ack.eq(sensor_read & serial.rx.rdy),
+            host.tx.data.eq(serial.rx.data)
+        ]
+
         # Song definition
         song_bytes = [67, 16, 67, 16, 67, 16, 64, 64]
 
@@ -405,8 +412,7 @@ class RoombaTest(Elaboratable):
                 with m.If(~sending):
                     send(read_sensors)
                     m.d.sync += [
-                        cmd[1].eq(1), # 10 bytes
-                        #leds[0].eq(1)
+                        cmd[1].eq(0), # 26 bytes
                     ]
             with m.Else():
                 m.d.sync += s_cnt.eq(s_cnt + 1)
@@ -469,7 +475,7 @@ class RoombaTest(Elaboratable):
                 with m.If(deb3.btn_up):
                     m.next = "ROAM"
                 with m.If(deb4.btn_up):
-                    m.next = "SONG"
+                    m.next = "SENSORS"
                 with m.If(deb5.btn_up):
                     m.next = "ROM"
             # Roam around avoiding obstacles
@@ -537,8 +543,9 @@ class RoombaTest(Elaboratable):
             with m.State("SENSORS"):
                 send(read_sensors)
                 m.d.sync += [
-                    cmd[1].eq(1), # read 10 bytes
-                    #leds[0].eq(1)
+                    cmd[1].eq(0), # read 26 bytes,
+                    sensor_read.eq(1),
+                    send_sensor_data.eq(0)
                 ]
                 m.next = "WAIT"   
             with m.State("WAIT"):
@@ -673,10 +680,10 @@ class RoombaTest(Elaboratable):
                             serial.tx.ack.eq(1)
                         ]
 
-        # Read Roomba sensor data - 10 byte packets
+        # Read Roomba sensor data - 26 byte packets
         with m.If(serial.rx.rdy):
             m.d.sync += sensor.word_select(si, 8).eq(serial.rx.data)
-            with m.If(si == 9):
+            with m.If(si == 25):
                 m.d.sync += si.eq(0)
             with m.Else():
                 m.d.sync += si.eq(si + 1)
