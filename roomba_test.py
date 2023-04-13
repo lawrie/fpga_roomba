@@ -220,7 +220,7 @@ class RoombaTest(Elaboratable):
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
         s_cnt = Signal(18) # Counter for delay between roomba sensor reads
         sensor_read = Signal(1) # Set when continuous sensor reads are required
-        send_lidar_data = Signal(reset=1)
+        send_lidar_data = Signal(reset=0)
         send_roomba_data = Signal(reset=0)
 
         obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
@@ -434,7 +434,9 @@ class RoombaTest(Elaboratable):
                     # Set device detect low to wake-up Roomba
                     serial.tx.ack.eq(0),
                     dd.eq(0),
-                    cnt.eq(cnt + 1)
+                    cnt.eq(cnt + 1),
+                    send_roomba_data.eq(0),
+                    send_lidar_data.eq(1)
                 ]
                 with m.If(cnt == int(clk_freq * dd_time)):
                     # Set device detect high
