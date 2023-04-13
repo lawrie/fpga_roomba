@@ -49,9 +49,12 @@ wallThickness = 2 * unitGridSize
 numSamplesPerRev = 450
 initXY = {"x": 0.0, "y": 0.0, "theta": (9 * np.pi) / 8}
 og = OccupancyGrid(initMapXLength, initMapYLength, initXY, unitGridSize, lidarFOV, numSamplesPerRev, lidarMaxRange, wallThickness)
+print("Occupancy grid created")
+
 scanMatchSearchRadius, scanMatchSearchHalfRad, scanSigmaInNumGrid, wallThickness, moveRSigma, maxMoveDeviation, turnSigma, \
     missMatchProbAtCoarse, coarseFactor = 1.4, 0.25, 2, 5 * unitGridSize, 0.1, 0.25, 0.3, 0.15, 5
 sm = ScanMatcher(og, scanMatchSearchRadius, scanMatchSearchHalfRad, scanSigmaInNumGrid, moveRSigma, maxMoveDeviation, turnSigma, missMatchProbAtCoarse, coarseFactor)
+print("Scan matcher created")
 
 def draw_robot():
     screen.set_at((width // 2 - 1, width // 2 - 1), BOT_COLOR)
@@ -71,12 +74,15 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=1) as serial:
         while True:
             b = serial.read(2)
             if not b:
+                print ("No response")
                 continue
             if b[0] == 0x54 and b[1] == 0x2c:
                 serial.read(45)
                 b = serial.read(47)
                 if b[0] == 0x54 and b[1] == 0x2c:
                     break
+
+        print("Sync done")
 
         frame = 0
         idx = 0

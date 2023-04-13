@@ -220,7 +220,7 @@ class RoombaTest(Elaboratable):
         max_angle = Signal(16, reset=0x0000) # Maximum start of frame angle in 1/100s
         s_cnt = Signal(18) # Counter for delay between roomba sensor reads
         sensor_read = Signal(1) # Set when continuous sensor reads are required
-        send_sensor_data = Signal(reset=0)
+        send_lidar_data = Signal(reset=1)
         send_roomba_data = Signal(reset=0)
 
         obstacle = ((distance < 0x300) | (sensor[0:4] > 0))
@@ -245,17 +245,19 @@ class RoombaTest(Elaboratable):
         #]
         
         # Copy bytes from lidar to host
-        m.d.sync += [
-            host.tx.ack.eq(send_sensor_data & ld19.rx.rdy),
-            host.tx.data.eq(ld19.rx.data)
-        ]
+        with m.If(send_lidar_data):
+            m.d.sync += [
+                host.tx.ack.eq(ld19.rx.rdy),
+                host.tx.data.eq(ld19.rx.data)
+            ]
 
 
         # Copy bytes from roomba to host
-        m.d.sync += [
-            host.tx.ack.eq(send_roomba_data & serial.rx.rdy),
-            host.tx.data.eq(serial.rx.data)
-        ]
+        with m.If(send_roomba_data):
+            m.d.sync += [
+                host.tx.ack.eq(serial.rx.rdy),
+                host.tx.data.eq(serial.rx.data)
+            ]
 
         # Song definition
         song_bytes = [67, 16, 67, 16, 67, 16, 64, 64]
@@ -550,7 +552,7 @@ class RoombaTest(Elaboratable):
                 send(read_sensors)
                 m.d.sync += [
                     cmd[1].eq(0), # read 26 bytes,
-                    send_sensor_data.eq(0),
+                    send_lidar_data.eq(0),
                     send_roomba_data.eq(1)
                 ]
                 m.next = "WAIT_UART"   

@@ -9,6 +9,7 @@ with serial.Serial("/dev/ttyUSB0", 230400, timeout=10) as serial:
     while True:
         data = serial.read(26)
         if not data:
+            print("No data")
             continue
         distance = (data[12] << 8) + data[13]
         if distance > 0x7fff:
