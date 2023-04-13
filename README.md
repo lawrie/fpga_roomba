@@ -118,3 +118,21 @@ The main parts of the gateware are:
 ## The robot in action
 
 Here is a [video](https://twitter.com/i/status/1628144131720597505) of an early version of the robot being driven by the Phone App, and stopping when an obstacle (my foot) is detected.
+
+## Host mapping
+
+If the data from this robot is send to a host computer, e.g, a Raspberry Pi, then a fast SLAM algorithm can be applied to the data.
+
+I am currently trying to convert this [SLAM-2D-LIDAR-SCAN](https://github.com/xiaofeng419/SLAM-2D-LIDAR-SCAN) python project to use the lidar data from the LD19 sensor.
+
+That project implements an OccupancyGrid class that draws an Occupancy Grid Map from the Lidar data. This is an example using the LD19 sensor:
+
+![Occupancy map]( https://raw.githubusercontent.com/lawrie/fpga_roomba/main/map.png)
+
+There is then a ScanMatcher_OGBased class that takes an existing occupancy grid and uses the Lidar data to locate the robot within the map.
+
+And finally there is a FastSLAM class that uses those two classes to implement the Dast SLAM algorithm using a particle filter.
+
+I am planning to send the roomba sensor data to the host and calculate the robot pose from it. That, plus the lidar range data and timestamps is what the Fast SLAM algorithm requires.
+
+
